@@ -1,0 +1,440 @@
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_USER_PROFILE } from '@shared/constants';
+import {
+  applyCostOverridesToSnapshot,
+  isUpstoxNonEquityInstrument,
+  reconcilePortfolio
+} from '@main/engine/reconciler';
+import { IndmoneyFetchPayload, UpstoxFetchPayload } from '@shared/types';
+
+function makeBaseIndmoney(): IndmoneyFetchPayload {
+  return {
+    networth: {
+      total_invested: 1500000,
+      total_current_value: 1650000,
+      total_networth: 1650000,
+      investments: [
+        { asset_type: 'STOCK', invested_value: 650000, current_value: 650000, progress_value_percentage: 39.39 },
+        { asset_type: 'MF', invested_value: 800000, current_value: 950000, return: 150000, return_percentage: 18.75, progress_value_percentage: 57.58 },
+        { asset_type: 'SA', invested_value: 50000, current_value: 50000, return: 0, return_percentage: 0, progress_value_percentage: 3.03 }
+      ],
+      liabilities: { total: 0 }
+    },
+    stocks: [
+      {
+        investment: 'HDFC Bank Ltd',
+        investment_code: 'S1',
+        broker: 'Upstox',
+        total_units: 100,
+        unit_price: 1700,
+        market_value: 170000
+      },
+      {
+        investment: 'Jio Platforms Ltd',
+        investment_code: 'S2',
+        broker: 'Upstox',
+        total_units: 10,
+        unit_price: 1400,
+        market_value: 14000
+      },
+      {
+        investment: 'Billionbrains Garage Ventures Ltd',
+        investment_code: 'S3',
+        broker: 'Upstox',
+        total_units: 150,
+        unit_price: 220,
+        market_value: 33000
+      },
+      {
+        investment: 'Motilal Oswal Nasdaq 100 ETF',
+        investment_code: 'S4',
+        broker: 'Paytm Money',
+        total_units: 2000,
+        unit_price: 216.5,
+        market_value: 433000
+      }
+    ],
+    mutualFunds: [
+      {
+        investment: 'Kotak Equity Arbitrage Fund',
+        investment_code: 'MF1',
+        total_units: 10000,
+        unit_price: 40,
+        invested_amount: 380000,
+        market_value: 400000,
+        total_pnl: 20000,
+        pnl_per: 5.26,
+        assetclass_l2: 'others'
+      },
+      {
+        investment: 'HDFC Liquid Fund',
+        investment_code: 'MF2',
+        total_units: 50,
+        unit_price: 5000,
+        invested_amount: 240000,
+        market_value: 250000,
+        total_pnl: 10000,
+        pnl_per: 4.17,
+        assetclass_l2: 'liquid'
+      }
+    ],
+    mfSips: [
+      {
+        name: 'Parag Parikh Flexi Cap',
+        category: 'Flexi Cap',
+        investedAmountVal: 180000,
+        currentValueVal: 300000,
+        gainPercentageVal: 66.6,
+        active_sips: [{ sip_frequency: 'WEEKLY', amount: 10000, sip_start_date: '05-05-2026' }]
+      }
+    ],
+    stockSips: []
+  };
+}
+
+function makeBaseUpstox(): UpstoxFetchPayload {
+  return {
+    holdings: [
+      {
+        tradingsymbol: 'HDFCBANK',
+        company_name: 'HDFC BANK LIMITED',
+        isin: 'INE040A01034',
+        quantity: 100,
+        average_price: 1400,
+        last_price: 1700,
+        pnl: 30000,
+        day_change_percentage: 1.2
+      },
+      {
+        tradingsymbol: 'JPL',
+        company_name: 'JIO PLATFORMS LIMITED',
+        isin: 'INE0BJO01010',
+        quantity: 10,
+        average_price: 1350,
+        last_price: 1400,
+        pnl: 500,
+        day_change_percentage: 0.4
+      },
+      {
+        tradingsymbol: 'GROWW',
+        company_name: 'BILLIONBRAINS GARAGE VN L',
+        isin: 'INE0HOQ01053',
+        quantity: 150,
+        average_price: 180,
+        last_price: 220,
+        pnl: 6000,
+        day_change_percentage: 2.1
+      },
+      {
+        tradingsymbol: '1075SCL34',
+        company_name: 'SEC RE NCD 10.75% SR XI',
+        isin: 'INE148I07TP7',
+        quantity: 10,
+        average_price: 1000,
+        last_price: 1055,
+        pnl: 550,
+        day_change_percentage: 0
+      }
+    ],
+    funds: { availableMargin: 1200, usedMargin: 0, payinAmount: 1200 },
+    positions: [],
+    orders: []
+  };
+}
+
+describe('reconcilePortfolio', () => {
+  it('identifies corporate NCDs and G-Secs via ISIN and symbol rules', () => {
+    expect(isUpstoxNonEquityInstrument({ tradingsymbol: '1075SCL34', isin: 'INE148I07TP7' })).toBe(true);
+    expect(isUpstoxNonEquityInstrument({ tradingsymbol: 'SGBNOV28', isin: 'IN0020200153' })).toBe(true);
+    expect(isUpstoxNonEquityInstrument({ tradingsymbol: 'HDFCBANK', isin: 'INE040A01034' })).toBe(false);
+  });
+
+  it('reconciles live Upstox + INDmoney equities dynamically, separates NCD bonds, and adjusts true cost basis', () => {
+    const snap = reconcilePortfolio({
+      indmoney: makeBaseIndmoney(),
+      upstox: makeBaseUpstox(),
+      upstoxState: 'live',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false,
+      fetchedAt: '2026-11-20T16:00:00.000Z'
+    });
+
+    expect(snap.reconciliation.matchedCount).toBe(3);
+    expect(snap.reconciliation.externalCount).toBe(1);
+    expect(snap.reconciliation.nonEquityCount).toBe(1);
+    expect(snap.reconciliation.unmatchedIndmoney).toHaveLength(0);
+    expect(snap.reconciliation.unmatchedUpstox).toHaveLength(0);
+    expect(snap.reconciliation.aggregateDiff).toBe(0);
+
+    // Upstox equity invested = 140,000 + 13,500 + 27,000 = 180,500; external proxy = 433,000 -> total stock cost = 613,500
+    // Adjusted total invested = 1,500,000 - 650,000 + 613,500 = 1,463,500
+    expect(snap.totalInvestedAdjusted).toBe(1463500);
+    expect(snap.emergencyCushionTotal).toBe(450000); // 400k Arbitrage + 50k SA
+    expect(snap.liquidCorpusTotal).toBe(250000);
+  });
+
+  it('applies user-defined symbol aliases for non-obvious name changes', () => {
+    const ind = makeBaseIndmoney();
+    ind.stocks[2] = {
+      investment: 'Completely Renamed Holding Corp',
+      investment_code: 'S3',
+      broker: 'Upstox',
+      total_units: 150,
+      unit_price: 225, // slightly different price so exact fallback would not trigger
+      market_value: 33750
+    };
+
+    const snap = reconcilePortfolio({
+      indmoney: ind,
+      upstox: makeBaseUpstox(),
+      upstoxState: 'live',
+      aliases: [{ indmoneyName: 'Completely Renamed Holding Corp', upstoxSymbol: 'GROWW' }],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    expect(snap.reconciliation.matchedCount).toBe(3);
+    expect(snap.reconciliation.unmatchedIndmoney).toHaveLength(0);
+    // Discrepancy flagged because INDmoney value (33,750) vs Upstox value (33,000) differs by ₹750 > ₹500
+    expect(snap.reconciliation.discrepancies).toHaveLength(1);
+    expect(snap.reconciliation.discrepancies[0].symbol).toBe('GROWW');
+  });
+
+  it('carries forward last known Upstox cost basis during stale partial sync', () => {
+    const snap = reconcilePortfolio({
+      indmoney: makeBaseIndmoney(),
+      upstox: null,
+      upstoxState: 'stale_reauth_required',
+      previousCostBasis: [
+        { symbol: 'HDFCBANK', name: 'HDFC Bank Ltd', isin: 'INE040A01034', averagePrice: 1400 },
+        { symbol: 'JPL', name: 'Jio Platforms Ltd', isin: 'INE0BJO01010', averagePrice: 1350 }
+      ],
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    const hdfc = snap.equities.find((e) => e.symbol === 'HDFCBANK');
+    expect(hdfc).toBeDefined();
+    expect(hdfc?.costBasisSource).toBe('upstox_carried_forward');
+    expect(hdfc?.investedValue).toBe(140000);
+    expect(hdfc?.pnl).toBe(30000);
+  });
+
+  it('merges active SIPs and MF holdings across INDmoney and Upstox, filters CANCELLED SIPs, and deduplicates overlap', () => {
+    const ind = makeBaseIndmoney();
+    ind.mfSips[0].isin = 'INF879O01027';
+    ind.stockSips = [
+      {
+        name: 'Nippon India ETF Gold BeES',
+        symbol: 'GOLDBEES',
+        isin: 'INF204KB17I5',
+        status: 'ACTIVE',
+        amount: 5000,
+        frequency: 'MONTHLY',
+        start_date: '2026-06-01'
+      }
+    ];
+
+    const up = makeBaseUpstox();
+    up.mfHoldings = [
+      {
+        fund: 'Kotak Equity Arbitrage Fund', // overlaps INDmoney -> should NOT duplicate
+        isin: 'INF174K01LS2',
+        units: 10000,
+        nav: 40,
+        invested_value: 380000,
+        current_value: 400000
+      },
+      {
+        fund: 'HDFC Mid-Cap Opportunities Direct Growth', // Upstox-only -> should merge!
+        isin: 'INF179K01XQ0',
+        units: 500,
+        nav: 180,
+        invested_value: 75000,
+        current_value: 90000
+      }
+    ];
+    up.mfSips = [
+      {
+        fund: 'Parag Parikh Flexi Cap', // Duplicate of INDmoney weekly ₹10k SIP -> should deduplicate
+        status: 'ACTIVE',
+        frequency: 'WEEKLY',
+        instrument_key: 'INF879O01027',
+        instalment_amount: 10000
+      },
+      {
+        fund: 'HDFC Mid-Cap Opportunities Direct Growth', // Active Upstox-only SIP -> should include!
+        status: 'ACTIVE',
+        frequency: 'MONTHLY',
+        instrument_key: 'INF179K01XQ0',
+        instalment_amount: 12000,
+        next_instalment: '2026-12-05'
+      },
+      {
+        fund: 'Old Cancelled ELSS Fund', // CANCELLED -> must be excluded
+        status: 'CANCELLED',
+        frequency: 'MONTHLY',
+        instrument_key: 'INF999K01001',
+        instalment_amount: 1000
+      }
+    ];
+
+    const snap = reconcilePortfolio({
+      indmoney: ind,
+      upstox: up,
+      upstoxState: 'live',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    // 2 INDmoney MFs + 1 unique Upstox MF = 3 total (no duplicate Kotak Arbitrage)
+    expect(snap.mutualFunds).toHaveLength(3);
+    expect(snap.mutualFunds.some((m) => m.broker === 'Upstox' && m.name.includes('Mid-Cap'))).toBe(true);
+
+    // 1 INDmoney MF SIP + 1 INDmoney Stock SIP + 1 unique Upstox ACTIVE MF SIP = 3 total (duplicate Parag Parikh + CANCELLED ELSS excluded)
+    expect(snap.activeSips).toHaveLength(3);
+    expect(snap.activeSips.some((s) => s.broker === 'Upstox' && s.amount === 12000)).toBe(true);
+    expect(snap.activeSips.some((s) => s.broker === 'INDmoney' && s.instrumentType === 'STOCK' && s.amount === 5000)).toBe(true);
+    expect(snap.activeSips.some((s) => s.fundName.includes('Cancelled'))).toBe(false);
+    expect(snap.weeklySipOutflow).toBe(10000);
+    expect(snap.monthlySipOutflow).toBe(17000); // 12,000 Upstox MF + 5,000 INDmoney Stock SIP
+  });
+
+  it('matches acronym/abbreviated NSE holdings generically without manual aliases and preserves native INDmoney cost basis', () => {
+    const ind: IndmoneyFetchPayload = {
+      networth: {
+        total_invested: 900000,
+        total_current_value: 950000,
+        total_networth: 950000,
+        investments: [{ asset_type: 'STOCK', invested_value: 900000, current_value: 950000 }]
+      },
+      stocks: [
+        { investment: 'Bharat Dynamics Ltd', investment_code: 'I1', broker: 'Upstox', total_units: 100, unit_price: 1030, market_value: 103000 },
+        { investment: 'Mahindra & Mahindra Ltd', investment_code: 'I2', broker: 'Upstox', total_units: 50, unit_price: 3500, market_value: 175000 },
+        { investment: 'Cholamandalam Investment & Finance Company Ltd', investment_code: 'I3', broker: 'Upstox', total_units: 60, unit_price: 1870, market_value: 112200 },
+        { investment: 'Nippon India ETF Gold Bees', investment_code: 'I4', broker: 'Upstox', total_units: 800, unit_price: 102, market_value: 81600 },
+        // Stock bought directly on INDmoney demat -> has true cost basis & P&L!
+        { investment: 'Infosys Ltd', investment_code: 'I5', broker: 'INDmoney', total_units: 100, unit_price: 1850, market_value: 185000, invested_amount: 150000, total_pnl: 35000, pnl_per: 23.33 }
+      ],
+      mutualFunds: [],
+      mfSips: [],
+      stockSips: []
+    };
+
+    const up: UpstoxFetchPayload = {
+      holdings: [
+        { tradingsymbol: 'BDL', company_name: 'BHARAT DYNAMICS LIMITED', isin: 'INE171Z01026', quantity: 100, average_price: 1200, last_price: 1030 },
+        { tradingsymbol: 'M&M', company_name: 'MAHINDRA & MAHINDRA LTD', isin: 'INE101A01026', quantity: 50, average_price: 3000, last_price: 3500 },
+        { tradingsymbol: 'CHOLAFIN', company_name: 'CHOLAMANDALAM IN & FIN CO', isin: 'INE121A01024', quantity: 60, average_price: 1200, last_price: 1870 },
+        { tradingsymbol: 'GOLDBEES', company_name: 'NIP IND ETF GOLD BEES', isin: 'INF204KB17I5', quantity: 800, average_price: 120, last_price: 102 }
+      ],
+      funds: { availableMargin: 0, usedMargin: 0, payinAmount: 0 },
+      positions: [],
+      orders: []
+    };
+
+    const snap = reconcilePortfolio({
+      indmoney: ind,
+      upstox: up,
+      upstoxState: 'live',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    expect(snap.reconciliation.matchedCount).toBe(4);
+    expect(snap.reconciliation.unmatchedIndmoney).toHaveLength(0);
+    expect(snap.reconciliation.unmatchedUpstox).toHaveLength(0);
+
+    const infy = snap.equities.find((e) => e.name === 'Infosys Ltd');
+    expect(infy?.costBasisSource).toBe('indmoney_native');
+    expect(infy?.averagePrice).toBe(1500);
+    expect(infy?.pnl).toBe(35000);
+  });
+
+  it('supports standalone Upstox-only mode without INDmoney connected', () => {
+    const up = makeBaseUpstox();
+    up.mfHoldings = [
+      { fund: 'Parag Parikh Flexi Cap Direct Growth', isin: 'INF879O01027', units: 1000, nav: 85, invested_value: 70000, current_value: 85000 }
+    ];
+    up.mfSips = [
+      { fund: 'Parag Parikh Flexi Cap Direct Growth', status: 'ACTIVE', frequency: 'MONTHLY', instrument_key: 'INF879O01027', instalment_amount: 15000 }
+    ];
+
+    const snap = reconcilePortfolio({
+      indmoney: null,
+      upstox: up,
+      upstoxState: 'live',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    expect(snap.reconciliation.unmatchedUpstox).toHaveLength(0);
+    expect(snap.equities.filter((e) => !e.isNonEquity)).toHaveLength(3);
+    expect(snap.equities.filter((e) => e.isNonEquity)).toHaveLength(1);
+    expect(snap.mutualFunds).toHaveLength(1);
+    expect(snap.activeSips).toHaveLength(1);
+    // Equities (170k + 14k + 33k = 217k) + MF (85k) + NCD Bond (10.55k) + Cash Margin (1.2k) = 313,750
+    expect(snap.totalNetworth).toBe(313750);
+  });
+
+  it('adds non-synced Upstox stocks cleanly when INDmoney has no Upstox broker link', () => {
+    const ind = makeBaseIndmoney();
+    // Simulate a user who only holds Paytm Money stocks inside INDmoney (Upstox not linked inside INDmoney)
+    ind.stocks = [ind.stocks[3]];
+    ind.networth.total_networth = 1433000;
+    ind.networth.total_current_value = 1433000;
+    ind.networth.total_invested = 1283000;
+    ind.networth.investments[0] = { asset_type: 'STOCK', invested_value: 433000, current_value: 433000 };
+
+    const snap = reconcilePortfolio({
+      indmoney: ind,
+      upstox: makeBaseUpstox(),
+      upstoxState: 'live',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    expect(snap.reconciliation.unmatchedUpstox).toHaveLength(0);
+    expect(snap.equities.filter((e) => e.matchStatus === 'upstox_standalone')).toHaveLength(3);
+    // INDmoney 14.33L + Upstox equities 2.17L = 16.50L
+    expect(snap.totalNetworth).toBe(1650000);
+  });
+
+  it('applies manual and CSV cost-basis overrides to external holdings and recalculates total adjusted P&L', () => {
+    const snap = reconcilePortfolio({
+      indmoney: makeBaseIndmoney(),
+      upstox: makeBaseUpstox(),
+      upstoxState: 'live',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    // Paytm Money Nasdaq ETF has 2000 units @ ₹216.50 = ₹433,000 (initially proxy invested = ₹433,000, pnl = 0)
+    const { snapshot: updated, matchedCount } = applyCostOverridesToSnapshot(snap, [
+      {
+        holdingKey: 'name:motilaloswalnasdaq100etf',
+        displayName: 'Motilal Oswal Nasdaq 100 ETF',
+        averagePrice: 150,
+        source: 'csv_import',
+        updatedAt: '2026-11-20T18:00:00.000Z'
+      }
+    ]);
+
+    expect(matchedCount).toBe(1);
+    const nasdaq = updated.equities.find((e) => e.name.includes('Nasdaq'));
+    expect(nasdaq?.averagePrice).toBe(150);
+    expect(nasdaq?.investedValue).toBe(300000);
+    expect(nasdaq?.pnl).toBe(133000);
+    expect(nasdaq?.costBasisSource).toBe('csv_import');
+    // Total adjusted invested drops by ₹133,000 (from 1,463,500 to 1,330,500)
+    expect(updated.totalInvestedAdjusted).toBe(1330500);
+    expect(updated.totalUnrealizedGain).toBe(updated.totalNetworth - 1330500);
+  });
+});

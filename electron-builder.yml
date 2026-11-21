@@ -1,0 +1,35 @@
+appId: com.portfoliopulse.desktop
+productName: Portfolio Pulse
+copyright: Copyright © 2026 Portfolio Pulse Contributors
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**/*
+  - node_modules/sql.js/dist/sql-wasm.wasm
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!tests/*'
+  - '!{tsconfig.json,vitest.config.ts,electron.vite.config.ts}'
+asarUnpack:
+  - 'node_modules/sql.js/dist/sql-wasm.wasm'
+mac:
+  category: public.app-category.finance
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  identity: null
+dmg:
+  artifactName: '${name}-${version}-${arch}.${ext}'
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: '${name}-${version}-setup.${ext}'
