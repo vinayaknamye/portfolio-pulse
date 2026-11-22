@@ -83,6 +83,7 @@ async function bootstrap(): Promise<void> {
   const upstox = new UpstoxAdapter(store);
 
   const ipcCtx = {
+    userDataDir,
     repo,
     store,
     indmoney,

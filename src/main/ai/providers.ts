@@ -1,9 +1,17 @@
 import { AIProviderId } from '@shared/types';
 import { AI_PROVIDER_PRESETS } from '@shared/constants';
 
+export interface LLMAttachment {
+  fileName: string;
+  mimeType: string;
+  base64?: string;
+  extractedText?: string;
+}
+
 export interface LLMChatTurn {
   role: 'user' | 'assistant';
   content: string;
+  attachments?: LLMAttachment[];
 }
 
 export interface LLMCompletionRequest {
@@ -169,6 +177,12 @@ async function parseErrorBody(res: Response): Promise<string> {
   }
 }
 
+function formatTextAttachmentBlock(att: LLMAttachment): string {
+  const body = (att.extractedText || '').trim();
+  if (!body) return `[Attached File: ${att.fileName} (${att.mimeType}) — no plain text extracted]`;
+  return `--- Attached File: ${att.fileName} (${att.mimeType}) ---\n${body}\n--- End of ${att.fileName} ---`;
+}
+
 export async function runLLMCompletion(
   req: LLMCompletionRequest,
   fetchImpl: FetchFn = fetch
@@ -182,9 +196,36 @@ export async function runLLMCompletion(
     throw new Error(`Missing API key for ${preset.label}. Add your key in AI Insights or Settings.`);
   }
 
-  // 1. Anthropic Claude Messages API
+  // 1. Anthropic Claude Messages API (supports native PDF documents + images + text attachments)
   if (req.provider === 'claude') {
     const url = `${baseUrl}/v1/messages`;
+    const formatClaudeMessage = (m: LLMChatTurn) => {
+      if (!m.attachments || m.attachments.length === 0) {
+        return { role: m.role, content: m.content };
+      }
+      const blocks: Array<Record<string, unknown>> = [];
+      for (const att of m.attachments) {
+        if (att.mimeType === 'application/pdf' && att.base64) {
+          blocks.push({
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/pdf', data: att.base64 }
+          });
+        } else if (
+          ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(att.mimeType) &&
+          att.base64
+        ) {
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: att.mimeType, data: att.base64 }
+          });
+        } else {
+          blocks.push({ type: 'text', text: formatTextAttachmentBlock(att) });
+        }
+      }
+      blocks.push({ type: 'text', text: m.content });
+      return { role: m.role, content: blocks };
+    };
+
     const res = await fetchImpl(url, {
       method: 'POST',
       headers: {
@@ -196,7 +237,7 @@ export async function runLLMCompletion(
         model,
         max_tokens: maxTokens,
         system: req.systemPrompt,
-        messages: req.messages.map((m) => ({ role: m.role, content: m.content }))
+        messages: req.messages.map(formatClaudeMessage)
       })
     });
 
@@ -215,24 +256,40 @@ export async function runLLMCompletion(
     return { text, provider: req.provider, model };
   }
 
-  // 2. Google Gemini API
+  // 2. Google Gemini API (natively supports PDFs + images via inlineData)
   if (req.provider === 'gemini') {
     const cleanModel = normalizeGeminiModelId(model);
     const encodedModel = encodeURIComponent(cleanModel);
     const url = `${baseUrl}/v1beta/models/${encodedModel}:generateContent?key=${encodeURIComponent(req.apiKey!.trim())}`;
 
-    const callGemini = (useSystemInstruction: boolean) => {
-      const contents = req.messages.map((m, idx) => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [
-          {
-            text:
-              !useSystemInstruction && idx === 0
-                ? `${req.systemPrompt}\n\n---\n\n${m.content}`
-                : m.content
+    const callGemini = (useSystemInstruction: boolean, allowInlinePdf: boolean) => {
+      const contents = req.messages.map((m, idx) => {
+        const parts: Array<Record<string, unknown>> = [];
+        for (const att of m.attachments || []) {
+          const isImg = att.mimeType.startsWith('image/') && Boolean(att.base64);
+          const isPdf = att.mimeType === 'application/pdf' && Boolean(att.base64);
+          if (isImg || (isPdf && allowInlinePdf)) {
+            parts.push({
+              inlineData: {
+                mimeType: att.mimeType,
+                data: att.base64
+              }
+            });
+          } else {
+            parts.push({ text: formatTextAttachmentBlock(att) });
           }
-        ]
-      }));
+        }
+        parts.push({
+          text:
+            !useSystemInstruction && idx === 0
+              ? `${req.systemPrompt}\n\n---\n\n${m.content}`
+              : m.content
+        });
+        return {
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts
+        };
+      });
       const body: Record<string, unknown> = {
         contents,
         generationConfig: {
@@ -250,11 +307,26 @@ export async function runLLMCompletion(
       });
     };
 
-    let res = await callGemini(true);
+    let useSys = true;
+    let allowPdf = true;
+    let res = await callGemini(useSys, allowPdf);
     if (!res.ok && res.status === 400) {
       const errMsg = await parseErrorBody(res);
       if (/developer instruction|system.?instruction/i.test(errMsg)) {
-        res = await callGemini(false);
+        useSys = false;
+        res = await callGemini(useSys, allowPdf);
+      } else if (/mime|pdf|inline|unsupported/i.test(errMsg)) {
+        allowPdf = false;
+        res = await callGemini(useSys, allowPdf);
+      } else {
+        throw new Error(`Google Gemini error (${res.status}): ${errMsg}`);
+      }
+    }
+    if (!res.ok && res.status === 400 && allowPdf) {
+      const errMsg = await parseErrorBody(res);
+      if (/mime|pdf|inline|unsupported/i.test(errMsg)) {
+        allowPdf = false;
+        res = await callGemini(useSys, allowPdf);
       } else {
         throw new Error(`Google Gemini error (${res.status}): ${errMsg}`);
       }
@@ -276,25 +348,65 @@ export async function runLLMCompletion(
     return { text, provider: req.provider, model };
   }
 
-  // 3. OpenAI & OpenAI-Compatible API
+  // 3. OpenAI & OpenAI-Compatible API (images via image_url, PDFs via native file block or extracted text fallback)
   if (req.provider === 'openai') {
     const url = `${baseUrl}/v1/chat/completions`;
-    const res = await fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${req.apiKey!.trim()}`
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        temperature: 0.35,
-        messages: [
-          { role: 'system', content: req.systemPrompt },
-          ...req.messages.map((m) => ({ role: m.role, content: m.content }))
-        ]
+    const isOfficialOpenAi = /^https:\/\/api\.openai\.com/i.test(baseUrl);
+
+    const buildOpenAiMessages = (allowNativePdfFile: boolean) => [
+      { role: 'system', content: req.systemPrompt },
+      ...req.messages.map((m) => {
+        if (!m.attachments || m.attachments.length === 0) {
+          return { role: m.role, content: m.content };
+        }
+        const parts: Array<Record<string, unknown>> = [];
+        for (const att of m.attachments) {
+          if (att.mimeType.startsWith('image/') && att.base64) {
+            parts.push({
+              type: 'image_url',
+              image_url: { url: `data:${att.mimeType};base64,${att.base64}` }
+            });
+          } else if (att.mimeType === 'application/pdf' && att.base64 && allowNativePdfFile) {
+            parts.push({
+              type: 'file',
+              file: {
+                filename: att.fileName,
+                file_data: `data:application/pdf;base64,${att.base64}`
+              }
+            });
+          } else {
+            parts.push({ type: 'text', text: formatTextAttachmentBlock(att) });
+          }
+        }
+        parts.push({ type: 'text', text: m.content });
+        return { role: m.role, content: parts };
       })
-    });
+    ];
+
+    const callOpenAi = (allowNativePdfFile: boolean) =>
+      fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${req.apiKey!.trim()}`
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          temperature: 0.35,
+          messages: buildOpenAiMessages(allowNativePdfFile)
+        })
+      });
+
+    let res = await callOpenAi(isOfficialOpenAi);
+    if (!res.ok && res.status === 400 && isOfficialOpenAi) {
+      const errMsg = await parseErrorBody(res);
+      if (/file|pdf|invalid.*type|unsupported/i.test(errMsg)) {
+        res = await callOpenAi(false);
+      } else {
+        throw new Error(`OpenAI API error (${res.status}): ${errMsg}`);
+      }
+    }
 
     if (!res.ok) {
       throw new Error(`OpenAI API error (${res.status}): ${await parseErrorBody(res)}`);
@@ -308,7 +420,7 @@ export async function runLLMCompletion(
     return { text, provider: req.provider, model };
   }
 
-  // 4. Local Ollama API
+  // 4. Local Ollama API (images[] for vision models + extracted text for PDFs/text files)
   const url = `${baseUrl}/api/chat`;
   const res = await fetchImpl(url, {
     method: 'POST',
@@ -318,7 +430,25 @@ export async function runLLMCompletion(
       stream: false,
       messages: [
         { role: 'system', content: req.systemPrompt },
-        ...req.messages.map((m) => ({ role: m.role, content: m.content }))
+        ...req.messages.map((m) => {
+          if (!m.attachments || m.attachments.length === 0) {
+            return { role: m.role, content: m.content };
+          }
+          const images: string[] = [];
+          const textExtras: string[] = [];
+          for (const att of m.attachments) {
+            if (att.mimeType.startsWith('image/') && att.base64) {
+              images.push(att.base64);
+            } else {
+              textExtras.push(formatTextAttachmentBlock(att));
+            }
+          }
+          const combinedContent =
+            textExtras.length > 0 ? `${textExtras.join('\n\n')}\n\n${m.content}` : m.content;
+          return images.length > 0
+            ? { role: m.role, content: combinedContent, images }
+            : { role: m.role, content: combinedContent };
+        })
       ]
     })
   });

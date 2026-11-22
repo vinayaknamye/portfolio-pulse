@@ -301,6 +301,20 @@ export interface ReconciledBond {
 
 export type InsuranceCategory = 'Term Life' | 'Health' | 'Endowment / Guaranteed' | 'ULIP' | 'Vehicle / Other';
 
+export type InsuranceDocumentType = 'policy' | 'renewal';
+
+export interface InsuranceDocument {
+  id: number;
+  policyId: number;
+  docType: InsuranceDocumentType;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  docDate: string;
+  notes: string;
+  uploadedAt: string;
+}
+
 export interface InsurancePolicy {
   id?: number;
   category: InsuranceCategory;
@@ -311,6 +325,34 @@ export interface InsurancePolicy {
   renewalDate: string;
   paymentTerm: string;
   notes: string;
+  documents?: InsuranceDocument[];
+}
+
+export interface ParsedPolicySuggestion {
+  canceled?: boolean;
+  filePath?: string;
+  fileName?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  parsedBy?: 'ai' | 'local_heuristic';
+  notice?: string;
+  fields?: Partial<Omit<InsurancePolicy, 'id' | 'documents'>>;
+  error?: string;
+}
+
+export interface DocumentBinaryPayload {
+  id: number;
+  fileName: string;
+  mimeType: string;
+  base64: string;
+}
+
+export interface AdvisorAttachment {
+  id: string;
+  fileName: string;
+  filePath: string;
+  mimeType: string;
+  sizeBytes: number;
 }
 
 export type AdvisorTopic = 'holdings' | 'mutual_funds' | 'insurance' | 'tax_loan' | 'general';

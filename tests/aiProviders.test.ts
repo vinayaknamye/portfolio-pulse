@@ -182,4 +182,86 @@ describe('runLLMCompletion (BYOK Providers)', () => {
     );
     expect(ollamaModels).toEqual([{ id: 'qwen2.5:14b', displayName: 'qwen2.5:14b' }]);
   });
+
+  it('sends native PDF and image attachments cleanly across Claude, Gemini (with fallback), OpenAI, and Ollama', async () => {
+    // 1. Claude native PDF + image blocks
+    const claudeFetch = vi.fn().mockResolvedValue(
+      mockResponse({ content: [{ type: 'text', text: 'Reviewed ULIP brochure.' }] })
+    );
+    await runLLMCompletion(
+      {
+        provider: 'claude',
+        model: 'claude-sonnet-4-6',
+        apiKey: 'sk-ant',
+        systemPrompt: 'Sys',
+        messages: [
+          {
+            role: 'user',
+            content: 'Validate pitch',
+            attachments: [
+              { fileName: 'brochure.pdf', mimeType: 'application/pdf', base64: 'JVBERi0x', extractedText: 'ULIP 5yr lock-in' },
+              { fileName: 'quote.png', mimeType: 'image/png', base64: 'iVBORw0K' }
+            ]
+          }
+        ]
+      },
+      claudeFetch as unknown as typeof fetch
+    );
+    const claudeBody = JSON.parse(claudeFetch.mock.calls[0][1].body);
+    expect(claudeBody.messages[0].content[0].type).toBe('document');
+    expect(claudeBody.messages[0].content[1].type).toBe('image');
+
+    // 2. Gemini inlineData PDF -> fallback to extracted text when model rejects inline PDF
+    const geminiFetch = vi
+      .fn()
+      .mockResolvedValueOnce(mockResponse({ error: { message: 'Unsupported MIME type application/pdf' } }, false, 400))
+      .mockResolvedValueOnce(mockResponse({ candidates: [{ content: { parts: [{ text: 'Fallback OK' }] } }] }));
+    const gemRes = await runLLMCompletion(
+      {
+        provider: 'gemini',
+        model: 'gemma-3-27b-it',
+        apiKey: 'AIza',
+        systemPrompt: 'Sys',
+        messages: [
+          {
+            role: 'user',
+            content: 'Check brochure',
+            attachments: [
+              { fileName: 'plan.pdf', mimeType: 'application/pdf', base64: 'JVBERi0x', extractedText: 'Guaranteed 5.2% IRR' }
+            ]
+          }
+        ]
+      },
+      geminiFetch as unknown as typeof fetch
+    );
+    expect(gemRes.text).toBe('Fallback OK');
+    expect(geminiFetch).toHaveBeenCalledTimes(2);
+    const retryBody = JSON.parse(geminiFetch.mock.calls[1][1].body);
+    expect(retryBody.contents[0].parts[0].text).toContain('Guaranteed 5.2% IRR');
+
+    // 3. Ollama images[] + extracted PDF text
+    const ollamaFetch = vi.fn().mockResolvedValue(mockResponse({ message: { content: 'Local vision OK' } }));
+    await runLLMCompletion(
+      {
+        provider: 'ollama',
+        model: 'llama3.2-vision',
+        apiKey: null,
+        systemPrompt: 'Sys',
+        messages: [
+          {
+            role: 'user',
+            content: 'Check screenshot',
+            attachments: [
+              { fileName: 'shot.png', mimeType: 'image/png', base64: 'IMGBASE64' },
+              { fileName: 'notes.txt', mimeType: 'text/plain', extractedText: 'RM promised 12% fixed' }
+            ]
+          }
+        ]
+      },
+      ollamaFetch as unknown as typeof fetch
+    );
+    const ollamaBody = JSON.parse(ollamaFetch.mock.calls[0][1].body);
+    expect(ollamaBody.messages[1].images).toEqual(['IMGBASE64']);
+    expect(ollamaBody.messages[1].content).toContain('RM promised 12% fixed');
+  });
 });

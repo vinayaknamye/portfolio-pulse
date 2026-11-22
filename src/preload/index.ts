@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import {
+  AdvisorAttachment,
   AdvisorTopic,
   AIChatMessage,
   AIProviderId,
@@ -8,7 +9,11 @@ import {
   BrokerId,
   CostBasisOverride,
   CsvImportResult,
+  DocumentBinaryPayload,
+  InsuranceDocument,
+  InsuranceDocumentType,
   InsurancePolicy,
+  ParsedPolicySuggestion,
   SipBaselineItem,
   SymbolAlias,
   SyncResult,
@@ -37,8 +42,27 @@ export interface PortfolioPulseApi {
   }) => Promise<CostBasisOverride[]>;
   deleteCostOverride: (holdingKey: string) => Promise<CostBasisOverride[]>;
   importCostCsv: () => Promise<CsvImportResult>;
-  saveInsurancePolicy: (policy: InsurancePolicy) => Promise<InsurancePolicy[]>;
+  saveInsurancePolicy: (
+    policy: InsurancePolicy,
+    pendingDoc?: { filePath: string; docType: InsuranceDocumentType; docDate?: string; notes?: string }
+  ) => Promise<InsurancePolicy[]>;
   deleteInsurancePolicy: (id: number) => Promise<InsurancePolicy[]>;
+  pickAndParseInsuranceDoc: (opts?: { docType?: InsuranceDocumentType }) => Promise<ParsedPolicySuggestion>;
+  uploadInsuranceDocument: (payload: {
+    policyId: number;
+    docType: InsuranceDocumentType;
+    docDate?: string;
+    notes?: string;
+  }) => Promise<{
+    canceled: boolean;
+    document?: InsuranceDocument;
+    parsedSuggestion?: ParsedPolicySuggestion;
+    error?: string;
+  }>;
+  readInsuranceDocument: (docId: number) => Promise<DocumentBinaryPayload>;
+  openInsuranceDocumentExternal: (docId: number) => Promise<boolean>;
+  deleteInsuranceDocument: (docId: number) => Promise<InsurancePolicy[]>;
+  pickAdvisorAttachments: () => Promise<{ canceled: boolean; files: AdvisorAttachment[]; error?: string }>;
   saveAiApiKey: (provider: AIProviderId, apiKey: string) => Promise<boolean>;
   clearAiApiKey: (provider: AIProviderId) => Promise<boolean>;
   listAiModels: (payload: {
@@ -51,6 +75,7 @@ export interface PortfolioPulseApi {
     topic: AdvisorTopic;
     advisorName?: string;
     pitchText: string;
+    attachmentPaths?: string[];
   }) => Promise<AIReportRecord>;
   sendAiChat: (message: string) => Promise<{ userMsg: AIChatMessage; assistantMsg: AIChatMessage }>;
   clearAiChat: () => Promise<boolean>;
@@ -76,8 +101,14 @@ const api: PortfolioPulseApi = {
   saveCostOverride: (payload) => ipcRenderer.invoke('costOverride:save', payload),
   deleteCostOverride: (holdingKey) => ipcRenderer.invoke('costOverride:delete', holdingKey),
   importCostCsv: () => ipcRenderer.invoke('costOverride:importCsv'),
-  saveInsurancePolicy: (policy) => ipcRenderer.invoke('insurance:save', policy),
+  saveInsurancePolicy: (policy, pendingDoc) => ipcRenderer.invoke('insurance:save', { policy, pendingDoc }),
   deleteInsurancePolicy: (id) => ipcRenderer.invoke('insurance:delete', id),
+  pickAndParseInsuranceDoc: (opts) => ipcRenderer.invoke('insurance:pickAndParseDoc', opts),
+  uploadInsuranceDocument: (payload) => ipcRenderer.invoke('insurance:uploadDocument', payload),
+  readInsuranceDocument: (docId) => ipcRenderer.invoke('insurance:readDocument', docId),
+  openInsuranceDocumentExternal: (docId) => ipcRenderer.invoke('insurance:openDocumentExternal', docId),
+  deleteInsuranceDocument: (docId) => ipcRenderer.invoke('insurance:deleteDocument', docId),
+  pickAdvisorAttachments: () => ipcRenderer.invoke('advisor:pickAttachments'),
   saveAiApiKey: (provider, apiKey) => ipcRenderer.invoke('ai:saveApiKey', { provider, apiKey }),
   clearAiApiKey: (provider) => ipcRenderer.invoke('ai:clearApiKey', provider),
   listAiModels: (payload) => ipcRenderer.invoke('ai:listModels', payload),

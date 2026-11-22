@@ -5,14 +5,18 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  FileText,
+  Image as ImageIcon,
   Info,
   Loader2,
   MessageSquare,
+  Paperclip,
   Scale,
   Settings2,
-  Sparkles
+  Sparkles,
+  X
 } from 'lucide-react';
-import { AdvisorTopic, AIReportRecord, AppStatePayload } from '@shared/types';
+import { AdvisorAttachment, AdvisorTopic, AIReportRecord, AppStatePayload } from '@shared/types';
 import { AI_PROVIDER_PRESETS, NON_ADVISORY_DISCLAIMER } from '@shared/constants';
 import { formatTimestamp } from '../lib/format';
 import { MarkdownView } from '../components/MarkdownView';
@@ -31,7 +35,14 @@ interface InsightsProps {
     topic: AdvisorTopic;
     advisorName?: string;
     pitchText: string;
+    attachmentPaths?: string[];
   }) => Promise<AIReportRecord>;
+}
+
+function formatAttachmentSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 const ADVISOR_TOPICS: Array<{ id: AdvisorTopic; label: string; placeholder: string }> = [
@@ -86,6 +97,7 @@ export const Insights: React.FC<InsightsProps> = ({
   const [advisorTopic, setAdvisorTopic] = useState<AdvisorTopic>('insurance');
   const [advisorName, setAdvisorName] = useState('');
   const [pitchText, setPitchText] = useState('');
+  const [attachments, setAttachments] = useState<AdvisorAttachment[]>([]);
   const [validatingAdvisor, setValidatingAdvisor] = useState(false);
   const [advisorError, setAdvisorError] = useState<string | null>(null);
   const [latestAdvisorReport, setLatestAdvisorReport] = useState<AIReportRecord | null>(null);
@@ -120,20 +132,36 @@ export const Insights: React.FC<InsightsProps> = ({
     }
   };
 
+  const handlePickAttachments = async () => {
+    setAdvisorError(null);
+    const res = await window.portfolioPulse.pickAdvisorAttachments();
+    if (res.canceled) return;
+    if (res.error) {
+      setAdvisorError(res.error);
+      return;
+    }
+    setAttachments((prev) => {
+      const existingPaths = new Set(prev.map((a) => a.filePath));
+      const merged = [...prev, ...res.files.filter((f) => !existingPaths.has(f.filePath))];
+      return merged.slice(0, 5);
+    });
+  };
+
   const handleValidateAdvisor = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isConfigured) {
       onOpenAiSettings();
       return;
     }
-    if (!pitchText.trim()) return;
+    if (!pitchText.trim() && attachments.length === 0) return;
     setAdvisorError(null);
     setValidatingAdvisor(true);
     try {
       const report = await onValidateAdvisorInput({
         topic: advisorTopic,
         advisorName: advisorName.trim() || undefined,
-        pitchText: pitchText.trim()
+        pitchText: pitchText.trim(),
+        attachmentPaths: attachments.map((a) => a.filePath)
       });
       setLatestAdvisorReport(report);
       setSelectedReportId(report.id);
@@ -451,16 +479,61 @@ export const Insights: React.FC<InsightsProps> = ({
               </div>
 
               <div>
-                <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                  Recommendation / Pitch Details
-                </label>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                    Recommendation / Pitch Details
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void handlePickAttachments()}
+                    disabled={attachments.length >= 5}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                  >
+                    <Paperclip className="h-3.5 w-3.5 text-emerald-500" />
+                    Attach Files (PDF, Image, CSV, TXT)
+                  </button>
+                </div>
                 <textarea
                   value={pitchText}
                   onChange={(e) => setPitchText(e.target.value)}
                   rows={5}
                   placeholder={selectedTopicObj.placeholder}
-                  className="mt-1 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100"
+                  className="mt-1.5 w-full resize-y rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100"
                 />
+
+                {/* Attached Supporting Files */}
+                {attachments.length > 0 && (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                    {attachments.map((att) => {
+                      const isImg = att.mimeType.startsWith('image/');
+                      return (
+                        <div
+                          key={att.id}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-800 dark:text-emerald-200"
+                        >
+                          {isImg ? (
+                            <ImageIcon className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                          ) : (
+                            <FileText className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                          )}
+                          <span className="max-w-[200px] truncate font-medium">{att.fileName}</span>
+                          <span className="text-[10px] opacity-75">{formatAttachmentSize(att.sizeBytes)}</span>
+                          <button
+                            type="button"
+                            onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== att.id))}
+                            className="ml-0.5 rounded p-0.5 hover:bg-emerald-500/20"
+                            title="Remove file"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="mt-1.5 text-[11px] text-slate-400">
+                  Attach up to 5 brochures, benefit illustrations, PDF quotes, or RM screenshots (max 15 MB each). AI reads the file contents directly alongside your portfolio &amp; policies.
+                </p>
               </div>
 
               {advisorError && (
@@ -475,12 +548,16 @@ export const Insights: React.FC<InsightsProps> = ({
                 </span>
                 <button
                   type="submit"
-                  disabled={validatingAdvisor || !pitchText.trim() || !state.latestSnapshot}
+                  disabled={
+                    validatingAdvisor ||
+                    (!pitchText.trim() && attachments.length === 0) ||
+                    !state.latestSnapshot
+                  }
                   className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
                 >
                   {validatingAdvisor ? (
                     <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Analyzing Against Your Portfolio…
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Analyzing Pitch &amp; Files Against Portfolio…
                     </>
                   ) : (
                     <>
