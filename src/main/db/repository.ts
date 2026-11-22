@@ -161,22 +161,38 @@ export class PortfolioRepository {
   }
 
   getLastLiveUpstoxCostBasis(isDemo: boolean): PreviousUpstoxCostBasis[] {
-    const row = this.db.get<{ payload_json: string }>(
+    // Scan recent live snapshots and pick the newest one that actually contains Upstox live avg prices
+    // so an empty/degraded sync can never erase historical cost-basis carry-forward.
+    const rows = this.db.all<{ payload_json: string }>(
       `SELECT payload_json FROM snapshots
        WHERE is_demo = ? AND upstox_state = 'live'
-       ORDER BY snapshot_date DESC, id DESC LIMIT 1`,
+       ORDER BY snapshot_date DESC, id DESC LIMIT 15`,
       [isDemo ? 1 : 0]
     );
-    if (!row) return [];
-    const parsed = JSON.parse(row.payload_json) as PortfolioSnapshot;
-    return parsed.equities
-      .filter((e) => !e.isNonEquity && !e.isExternalBroker && e.averagePrice !== null && e.averagePrice > 0)
-      .map((e) => ({
-        symbol: e.symbol,
-        name: e.name,
-        isin: e.isin,
-        averagePrice: e.averagePrice as number
-      }));
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.payload_json) as PortfolioSnapshot;
+        const items = parsed.equities
+          .filter(
+            (e) =>
+              !e.isNonEquity &&
+              !e.isExternalBroker &&
+              e.averagePrice !== null &&
+              e.averagePrice > 0 &&
+              (e.costBasisSource === 'upstox_live' || e.costBasisSource === 'upstox_carried_forward')
+          )
+          .map((e) => ({
+            symbol: e.symbol,
+            name: e.name,
+            isin: e.isin,
+            averagePrice: e.averagePrice as number
+          }));
+        if (items.length > 0) return items;
+      } catch {
+        // Ignore malformed historical payload
+      }
+    }
+    return [];
   }
 
   getSnapshotHistory(isDemo: boolean, limit = 90): SnapshotHistoryPoint[] {

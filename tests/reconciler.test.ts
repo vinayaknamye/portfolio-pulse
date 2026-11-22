@@ -530,4 +530,180 @@ describe('reconcilePortfolio', () => {
     expect(updated.bonds?.[0].costBasisSource).toBe('csv_import');
     expect(updated.bonds?.[0].pnl).toBe(19940);
   });
+
+  it('deduplicates cross-broker NCDs (automatically & via manual alias) and matches SGB tranches by LTP', () => {
+    const ind = makeBaseIndmoney();
+    ind.bonds = [
+      {
+        investment: 'SAMMAAN CAPITAL LIMITED SR XI CAT III&IV 10.75 NCD 31MY34 FVRS1000',
+        investment_code: 'INDB1',
+        broker: 'INDmoney',
+        total_units: 10,
+        unit_price: 1055,
+        invested_amount: 10000,
+        market_value: 10550,
+        total_pnl: 550,
+        pnl_per: 5.5
+      },
+      {
+        investment: 'Sovereign Gold Bond Scheme 2023-24 - Series I',
+        investment_code: 'INDB2',
+        broker: 'INDmoney',
+        total_units: 25,
+        unit_price: 12937.8,
+        invested_amount: 323445,
+        market_value: 323445,
+        total_pnl: 0,
+        pnl_per: 0
+      }
+    ];
+
+    // Upstox already has 1075SCL34 ("SEC RE NCD 10.75% SR XI", qty 10, LTP 1055) in makeBaseUpstox()
+    const snapAuto = reconcilePortfolio({
+      indmoney: ind,
+      upstox: makeBaseUpstox(),
+      upstoxState: 'live',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    // Should have ONLY 2 bonds total (1 merged NCD + 1 SGB), NOT 3!
+    expect(snapAuto.bonds).toHaveLength(2);
+    const mergedNcd = snapAuto.bonds?.find((b) => b.bondType === 'NCD');
+    expect(mergedNcd?.symbol).toBe('1075SCL34');
+    expect(mergedNcd?.broker).toBe('Upstox');
+    expect(mergedNcd?.name).toContain('SAMMAAN CAPITAL');
+    expect(mergedNcd?.costBasisSource).toBe('upstox_live');
+
+    // Also verify manual alias works even if LTP differs > 1.5%
+    ind.bonds[0].unit_price = 1120;
+    const snapAlias = reconcilePortfolio({
+      indmoney: ind,
+      upstox: makeBaseUpstox(),
+      upstoxState: 'live',
+      aliases: [
+        {
+          indmoneyName: 'SAMMAAN CAPITAL LIMITED SR XI CAT III&IV 10.75 NCD 31MY34 FVRS1000',
+          upstoxSymbol: '1075SCL34'
+        }
+      ],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+    expect(snapAlias.bonds).toHaveLength(2);
+
+    // SGB CSV tranche "2.5% SGB 27-Jun-2031" (LTP 12936.83) matches "Sovereign Gold Bond Scheme 2023-24 - Series I" (LTP 12937.80)
+    const { snapshot: withSgbCsv, unmatchedOverrideNames } = applyCostOverridesToSnapshot(snapAuto, [
+      {
+        holdingKey: 'name:25sgb27jun2031@paytmmoney',
+        displayName: '2.5% SGB 27-Jun-2031',
+        broker: 'Paytm Money',
+        averagePrice: 5876,
+        csvQty: 15,
+        csvCurrentPrice: 12936.83,
+        source: 'csv_import',
+        updatedAt: '2026-11-22T00:00:00Z'
+      }
+    ]);
+    expect(unmatchedOverrideNames).toHaveLength(0);
+    const sgb = withSgbCsv.bonds?.find((b) => b.bondType === 'SGB');
+    expect(sgb?.averagePrice).toBe(5876);
+  });
+
+  it('reconciles itemized INDmoney FDs into emergency cushion while excluding locked tax-saver FDs', () => {
+    const ind = makeBaseIndmoney();
+    ind.networth.investments.push({
+      asset_type: 'FD',
+      invested_value: 250000,
+      current_value: 268000,
+      return: 18000,
+      return_percentage: 7.2
+    });
+    ind.networth.total_current_value += 268000;
+    ind.networth.total_networth += 268000;
+    ind.networth.total_invested += 250000;
+
+    ind.fixedDeposits = [
+      {
+        investment: 'HDFC Bank Fixed Deposit (7.10%)',
+        investment_code: 'FD1',
+        bank_name: 'HDFC Bank',
+        invested_amount: 150000,
+        market_value: 161000,
+        total_pnl: 11000,
+        pnl_per: 7.33,
+        interest_rate: 7.1,
+        maturity_date: '15-Sep-2027'
+      },
+      {
+        investment: 'SBI 5-Year Tax Saver FD (80C)',
+        investment_code: 'FD2',
+        invested_amount: 100000,
+        market_value: 107000,
+        interest_rate: '6.50%',
+        maturity_date: '10-Mar-2030'
+      }
+    ];
+    ind.savingsAccounts = [
+      { investment: 'HDFC Savings', bank_name: 'HDFC Bank', market_value: 35000 },
+      { investment: 'ICICI Savings', bank_name: 'ICICI Bank', market_value: 15000 }
+    ];
+
+    const snap = reconcilePortfolio({
+      indmoney: ind,
+      upstox: makeBaseUpstox(),
+      upstoxState: 'live',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    expect(snap.fixedDeposits).toHaveLength(2);
+    expect(snap.fixedDepositTotal).toBe(268000);
+    expect(snap.emergencyFdTotal).toBe(161000); // Only HDFC callable FD counts; SBI Tax Saver excluded
+    // Emergency Cushion = 400k Arbitrage + 50k SA + 161k Callable FD = 611,000
+    expect(snap.emergencyCushionTotal).toBe(611000);
+    expect(snap.arbitrageTotal).toBe(400000);
+
+    const taxSaver = snap.fixedDeposits?.find((f) => f.bank === 'SBI');
+    expect(taxSaver?.isTaxSaver).toBe(true);
+    expect(taxSaver?.countsTowardEmergency).toBe(false);
+    expect(taxSaver?.interestRate).toBe(6.5);
+
+    expect(snap.savingsAccounts).toHaveLength(2);
+    expect(snap.savingsAccounts?.[0].bank).toBe('HDFC Bank');
+  });
+
+  it('falls back to INDmoney aggregate FD allocation row when itemized FD holdings are unavailable', () => {
+    const ind = makeBaseIndmoney();
+    ind.networth.investments.push({
+      asset_type: 'FD',
+      invested_value: 200000,
+      current_value: 212500,
+      return: 12500,
+      return_percentage: 6.25
+    });
+    ind.networth.total_current_value += 212500;
+    ind.networth.total_networth += 212500;
+    ind.networth.total_invested += 200000;
+    ind.fixedDeposits = [];
+
+    const snap = reconcilePortfolio({
+      indmoney: ind,
+      upstox: null,
+      upstoxState: 'not_linked',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    expect(snap.fixedDeposits).toHaveLength(1);
+    expect(snap.fixedDeposits?.[0].source).toBe('indmoney_aggregate');
+    expect(snap.fixedDeposits?.[0].countsTowardEmergency).toBe(true);
+    expect(snap.fixedDepositTotal).toBe(212500);
+    expect(snap.emergencyFdTotal).toBe(212500);
+    // 400k Arbitrage + 50k SA + 212.5k Aggregate FD = 662,500
+    expect(snap.emergencyCushionTotal).toBe(662500);
+  });
 });

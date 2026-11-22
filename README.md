@@ -10,12 +10,13 @@ A **local-first, open-source Electron desktop app** for Indian retail investors 
 
 - **100% Local-First Privacy:** Zero backend servers, zero telemetry. Broker OAuth tokens and optional AI API keys are encrypted locally via Electron `safeStorage` (macOS Keychain / Windows DPAPI). Historical snapshots live in a local SQLite database on your machine.
 - **Flexible Multi-Broker Support (INDmoney, Upstox, or Both):**
-  - **INDmoney MCP (Multi-Asset Aggregator):** Real Estate, Mutual Funds, PPF/EPF, Gold, Bonds/SGBs, Savings Accounts, active MF & Stock SIPs, and aggregated holdings across external brokers (Paytm Money, Zerodha, Groww, etc.).
+  - **INDmoney MCP (Multi-Asset Aggregator):** Real Estate, Mutual Funds, Fixed Deposits (FDs), PPF/EPF, Gold, Bonds/SGBs, Savings Accounts, active MF & Stock SIPs, and aggregated holdings across external brokers (Paytm Money, Zerodha, Groww, etc.).
   - **Upstox MCP (Demat Stocks, MFs, SIPs & Margin):** Live demat equity average buy prices, accurate unrealized P&L, Upstox MF holdings & active MF SIPs, idle trading margin, and automatic ISIN-based non-equity bond/NCD separation.
   - **Works Standalone or Combined:** Connect INDmoney only, Upstox only, or both together. *(Tip: For the most complete net-worth view across all asset classes and external brokers, link/record all assets inside INDmoney first.)*
   - **Resilient Partial Sync:** If Upstox's OAuth session expires during a background daily refresh, INDmoney still syncs cleanly while carrying forward your last known Upstox cost basis and firing a 1-click OS notification to reconnect.
-- **Dedicated Direct Equities, Bonds & SGBs, and Mutual Funds Views:**
-  - Automatically separates Sovereign Gold Bonds (SGBs), Corporate NCDs, G-Secs, and Bonds into a dedicated **Bonds & SGBs** tab with inline Avg Cost editing and CSV support.
+- **Dedicated Direct Equities, Bonds & SGBs, Mutual Funds, and Emergency & FDs Views:**
+  - Automatically separates Sovereign Gold Bonds (SGBs), Corporate NCDs, G-Secs, and Bonds into a dedicated **Bonds & SGBs** tab with cross-broker NCD deduplication, inline Avg Cost editing, and CSV support.
+  - Dedicated **Emergency & FDs** view tracks all emergency-linked assets (**Savings Accounts**, **Callable Fixed Deposits**, and **Arbitrage Mutual Funds**) against your Emergency Cushion target — while keeping locked 5-year Tax-Saver FDs and Liquid/STP deployment pools clearly separated.
   - Zero-config NSE/BSE matching (ISIN → user alias → abbreviation, subset-token & acronym matching → unambiguous LTP + quantity fallback) + 1-click symbol alias mapper.
   - **Manual Avg Cost Editing & Smart Multi-Broker CSV Import:** Click any **Avg Cost** cell to edit inline, or import holdings CSVs from **Paytm Money Web (`Holdings → Download CSV`), Zerodha Console/Kite, Groww, Upstox, Angel One, ICICI Direct**, or any custom CSV — with automatic broker detection, split-broker partial-quantity notices, unmatched row diagnostics, and persistence across future daily syncs.
 - **Separate SIPs & Insights/Alerts Architecture:**

@@ -349,9 +349,13 @@ export async function connectMcpSession(options: {
         continue;
       }
 
-      if (/401|unauthorized|invalid_grant|invalid_token/i.test(msg) && !options.interactive) {
-        provider.cleanup();
-        throw new ReauthRequiredError(options.broker, msg);
+      if (/401|unauthorized|invalid_grant|invalid_token|token.*expired/i.test(msg)) {
+        provider.invalidateCredentials('tokens');
+        if (!options.interactive) {
+          provider.cleanup();
+          throw new ReauthRequiredError(options.broker, msg);
+        }
+        continue;
       }
 
       provider.cleanup();
@@ -361,6 +365,18 @@ export async function connectMcpSession(options: {
 
   provider.cleanup();
   throw new ReauthRequiredError(options.broker, `Could not complete OAuth handshake for ${options.broker}`);
+}
+
+export function extractMcpToolError(result: unknown): string | null {
+  if (!result || typeof result !== 'object') return null;
+  const rec = result as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
+  if (!rec.isError) return null;
+  const text = (rec.content || [])
+    .map((c) => (typeof c.text === 'string' ? c.text : ''))
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  return text || 'MCP tool returned an error';
 }
 
 export function extractMcpToolJson<T>(result: unknown): T | null {

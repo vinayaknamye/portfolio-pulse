@@ -320,7 +320,7 @@ export const Strategy: React.FC<StrategyProps> = ({
               className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs tabular-nums text-slate-900 focus:border-emerald-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
             />
             <span className="mt-0.5 block text-[11px] text-slate-400">
-              Compared against Arbitrage MFs + Savings Account balance.
+              Compared against Savings Account + Callable Fixed Deposits + Arbitrage MFs.
             </span>
           </label>
 

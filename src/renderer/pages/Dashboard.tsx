@@ -22,6 +22,7 @@ import {
   Wallet
 } from 'lucide-react';
 import { AppStatePayload } from '@shared/types';
+import { HoldingsSubTab } from './Holdings';
 import {
   formatInrCompact,
   formatInrFull,
@@ -35,7 +36,7 @@ interface DashboardProps {
   state: AppStatePayload;
   onNavigate: (
     tab: 'holdings' | 'audit' | 'insights' | 'strategy' | 'settings',
-    opts?: { insightsSubTab?: 'alerts' | 'reviews' | 'advisor' }
+    opts?: { insightsSubTab?: 'alerts' | 'reviews' | 'advisor'; holdingsSubTab?: HoldingsSubTab }
   ) => void;
   onDismissAlert: (id: string) => Promise<void>;
 }
@@ -50,9 +51,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
   const dayDeltaPct = prevPoint && prevPoint.totalNetworth > 0 ? (dayDelta / prevPoint.totalNetworth) * 100 : 0;
 
   const activeAlerts = state.alerts.filter((a) => !a.dismissed);
+
+  // Graceful fallback for cached pre-v0.3.1 snapshots that already contain an FD allocation row
+  const fdAllocTotal = snap.allocations
+    .filter((a) => /^(FD|FDS|FIXED_DEPOSIT|FIXED_DEPOSITS|BANK_FD)$/i.test(a.assetType))
+    .reduce((sum, a) => sum + a.currentValue, 0);
+  const fixedDepositTotal = snap.fixedDepositTotal ?? fdAllocTotal;
+  const emergencyFdTotal = snap.emergencyFdTotal ?? fdAllocTotal;
+  const arbitrageTotal =
+    snap.arbitrageTotal ?? snap.mutualFunds.filter((m) => m.isArbitrage).reduce((s, m) => s + m.currentValue, 0);
+  const effectiveEmergencyCushion =
+    snap.emergencyFdTotal === undefined && emergencyFdTotal > 0
+      ? snap.emergencyCushionTotal + emergencyFdTotal
+      : snap.emergencyCushionTotal;
+
+  const emergencyParts: string[] = [];
+  if (snap.savingsAccountBalance > 0) emergencyParts.push(`SA ${formatInrCompact(snap.savingsAccountBalance)}`);
+  if (emergencyFdTotal > 0) emergencyParts.push(`FDs ${formatInrCompact(emergencyFdTotal)}`);
+  if (arbitrageTotal > 0) emergencyParts.push(`Arb ${formatInrCompact(arbitrageTotal)}`);
+
   const emergencyPct =
     state.profile.emergencyTarget > 0
-      ? Math.min(100, Math.round((snap.emergencyCushionTotal / state.profile.emergencyTarget) * 100))
+      ? Math.min(100, Math.round((effectiveEmergencyCushion / state.profile.emergencyTarget) * 100))
       : 100;
 
   const upstoxLinked = snap.upstoxState !== 'not_linked';
@@ -156,13 +176,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800/90 dark:bg-surface-900">
+        <button
+          type="button"
+          onClick={() => onNavigate('holdings', { holdingsSubTab: 'emergency' })}
+          className="rounded-2xl border border-slate-200 bg-white p-5 text-left transition hover:border-amber-500/50 dark:border-slate-800/90 dark:bg-surface-900 dark:hover:border-amber-500/50"
+          title="View Emergency Cushion, Fixed Deposits & Liquidity breakdown"
+        >
           <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
             <span>Emergency Cushion</span>
             <Shield className="h-4 w-4 text-amber-500" />
           </div>
           <div className="mt-2 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">
-            {formatInrCompact(snap.emergencyCushionTotal)}
+            {formatInrCompact(effectiveEmergencyCushion)}
           </div>
           <div className="mt-2">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
@@ -175,8 +200,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
               <span>{emergencyPct}% of target</span>
               <span>Target {formatInrCompact(state.profile.emergencyTarget)}</span>
             </div>
+            <div className="mt-1 flex items-center justify-between gap-2 text-[10px] tabular-nums text-slate-400">
+              <span className="truncate">
+                {emergencyParts.length > 0 ? emergencyParts.join(' · ') : 'SA + FDs + Arbitrage'}
+              </span>
+              <span className="shrink-0 font-medium text-amber-600 dark:text-amber-400">Breakdown →</span>
+            </div>
           </div>
-        </div>
+        </button>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800/90 dark:bg-surface-900">
           <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
@@ -455,6 +486,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
                   </button>
                 </div>
               </>
+            )}
+
+            {fixedDepositTotal > 0 && (
+              <div className="flex items-center justify-between tabular-nums">
+                <span className="text-slate-500 dark:text-slate-400">Fixed Deposits</span>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('holdings', { holdingsSubTab: 'emergency' })}
+                  className="font-medium text-teal-600 hover:underline dark:text-teal-400"
+                >
+                  {formatInrCompact(fixedDepositTotal)} →
+                </button>
+              </div>
             )}
 
             <div className="flex items-center justify-between tabular-nums">
