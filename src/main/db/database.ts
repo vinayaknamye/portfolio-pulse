@@ -135,6 +135,22 @@ export class LocalDatabase {
         notes TEXT NOT NULL DEFAULT ''
       );
 
+      CREATE TABLE IF NOT EXISTS insurance_documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        policy_id INTEGER NOT NULL,
+        doc_type TEXT NOT NULL DEFAULT 'policy',
+        file_name TEXT NOT NULL,
+        stored_rel_path TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        doc_date TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        uploaded_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_insurance_docs_policy
+        ON insurance_documents(policy_id);
+
       CREATE TABLE IF NOT EXISTS ai_reports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         is_demo INTEGER NOT NULL DEFAULT 0,

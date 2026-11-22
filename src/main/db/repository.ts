@@ -5,6 +5,8 @@ import {
   BrokerConnectionStatus,
   BrokerId,
   CostBasisOverride,
+  InsuranceDocument,
+  InsuranceDocumentType,
   InsurancePolicy,
   PortfolioSnapshot,
   SipBaselineItem,
@@ -417,7 +419,7 @@ export class PortfolioRepository {
     this.db.run('DELETE FROM cost_basis_overrides WHERE holding_key = ?', [holdingKey.trim().toLowerCase()]);
   }
 
-  // --- Insurance Policies ---
+  // --- Insurance Policies & Documents ---
   getInsurancePolicies(isDemo: boolean): InsurancePolicy[] {
     const rows = this.db.all<{
       id: number;
@@ -436,6 +438,43 @@ export class PortfolioRepository {
        ORDER BY id ASC`,
       [isDemo ? 1 : 0]
     );
+
+    const docRows = this.db.all<{
+      id: number;
+      policy_id: number;
+      doc_type: InsuranceDocumentType;
+      file_name: string;
+      mime_type: string;
+      size_bytes: number;
+      doc_date: string;
+      notes: string;
+      uploaded_at: string;
+    }>(
+      `SELECT d.id, d.policy_id, d.doc_type, d.file_name, d.mime_type, d.size_bytes, d.doc_date, d.notes, d.uploaded_at
+       FROM insurance_documents d
+       INNER JOIN insurance_policies p ON p.id = d.policy_id
+       WHERE p.is_demo = ?
+       ORDER BY CASE d.doc_type WHEN 'policy' THEN 0 ELSE 1 END, d.doc_date DESC, d.uploaded_at DESC`,
+      [isDemo ? 1 : 0]
+    );
+
+    const docsByPolicy = new Map<number, InsuranceDocument[]>();
+    for (const d of docRows) {
+      const list = docsByPolicy.get(d.policy_id) || [];
+      list.push({
+        id: d.id,
+        policyId: d.policy_id,
+        docType: d.doc_type === 'renewal' ? 'renewal' : 'policy',
+        fileName: d.file_name,
+        mimeType: d.mime_type,
+        sizeBytes: Number(d.size_bytes ?? 0),
+        docDate: d.doc_date || '',
+        notes: d.notes || '',
+        uploadedAt: d.uploaded_at
+      });
+      docsByPolicy.set(d.policy_id, list);
+    }
+
     return rows.map((r) => ({
       id: r.id,
       category: r.category,
@@ -445,7 +484,8 @@ export class PortfolioRepository {
       annualPremium: Number(r.annual_premium ?? 0),
       renewalDate: r.renewal_date || '',
       paymentTerm: r.payment_term || '',
-      notes: r.notes || ''
+      notes: r.notes || '',
+      documents: docsByPolicy.get(r.id) || []
     }));
   }
 
@@ -487,11 +527,104 @@ export class PortfolioRepository {
         policy.notes.trim()
       ]
     );
-    return { ...policy, id: this.db.getLastInsertId() };
+    return { ...policy, id: this.db.getLastInsertId(), documents: [] };
   }
 
-  deleteInsurancePolicy(id: number): void {
-    this.db.run('DELETE FROM insurance_policies WHERE id = ?', [id]);
+  deleteInsurancePolicy(id: number): string[] {
+    const docPaths = this.db
+      .all<{ stored_rel_path: string }>('SELECT stored_rel_path FROM insurance_documents WHERE policy_id = ?', [id])
+      .map((r) => r.stored_rel_path);
+    this.db.execBatch((rawDb) => {
+      rawDb.run('DELETE FROM insurance_documents WHERE policy_id = ?', [id]);
+      rawDb.run('DELETE FROM insurance_policies WHERE id = ?', [id]);
+    });
+    return docPaths;
+  }
+
+  addInsuranceDocument(record: {
+    policyId: number;
+    docType: InsuranceDocumentType;
+    fileName: string;
+    storedRelPath: string;
+    mimeType: string;
+    sizeBytes: number;
+    docDate?: string;
+    notes?: string;
+    uploadedAt?: string;
+  }): InsuranceDocument {
+    const uploadedAt = record.uploadedAt || new Date().toISOString();
+    this.db.run(
+      `INSERT INTO insurance_documents
+       (policy_id, doc_type, file_name, stored_rel_path, mime_type, size_bytes, doc_date, notes, uploaded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        record.policyId,
+        record.docType,
+        record.fileName.trim(),
+        record.storedRelPath,
+        record.mimeType,
+        record.sizeBytes,
+        (record.docDate || '').trim(),
+        (record.notes || '').trim(),
+        uploadedAt
+      ]
+    );
+    return {
+      id: this.db.getLastInsertId(),
+      policyId: record.policyId,
+      docType: record.docType,
+      fileName: record.fileName.trim(),
+      mimeType: record.mimeType,
+      sizeBytes: record.sizeBytes,
+      docDate: (record.docDate || '').trim(),
+      notes: (record.notes || '').trim(),
+      uploadedAt
+    };
+  }
+
+  getInsuranceDocumentWithPath(docId: number): { doc: InsuranceDocument; storedRelPath: string } | null {
+    const r = this.db.get<{
+      id: number;
+      policy_id: number;
+      doc_type: InsuranceDocumentType;
+      file_name: string;
+      stored_rel_path: string;
+      mime_type: string;
+      size_bytes: number;
+      doc_date: string;
+      notes: string;
+      uploaded_at: string;
+    }>(
+      `SELECT id, policy_id, doc_type, file_name, stored_rel_path, mime_type, size_bytes, doc_date, notes, uploaded_at
+       FROM insurance_documents
+       WHERE id = ?`,
+      [docId]
+    );
+    if (!r) return null;
+    return {
+      storedRelPath: r.stored_rel_path,
+      doc: {
+        id: r.id,
+        policyId: r.policy_id,
+        docType: r.doc_type === 'renewal' ? 'renewal' : 'policy',
+        fileName: r.file_name,
+        mimeType: r.mime_type,
+        sizeBytes: Number(r.size_bytes ?? 0),
+        docDate: r.doc_date || '',
+        notes: r.notes || '',
+        uploadedAt: r.uploaded_at
+      }
+    };
+  }
+
+  deleteInsuranceDocument(docId: number): string | null {
+    const existing = this.db.get<{ stored_rel_path: string }>(
+      'SELECT stored_rel_path FROM insurance_documents WHERE id = ?',
+      [docId]
+    );
+    if (!existing) return null;
+    this.db.run('DELETE FROM insurance_documents WHERE id = ?', [docId]);
+    return existing.stored_rel_path;
   }
 
   // --- AI Reports & Chat ---
@@ -576,6 +709,7 @@ export class PortfolioRepository {
       rawDb.run('DELETE FROM sip_baselines');
       rawDb.run('DELETE FROM symbol_aliases');
       rawDb.run('DELETE FROM cost_basis_overrides');
+      rawDb.run('DELETE FROM insurance_documents');
       rawDb.run('DELETE FROM insurance_policies');
       rawDb.run('DELETE FROM ai_reports');
       rawDb.run('DELETE FROM ai_chat_messages');

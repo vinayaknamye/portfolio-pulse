@@ -1,6 +1,9 @@
 {
   "name": "portfolio-pulse",
-  "version": "0.2.0",
+  "version": "0.3.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "description": "Local-first Indian portfolio tracker, multi-broker MCP reconciler (INDmoney + Upstox), daily audit notifier, and BYOK AI advisor.",
   "author": "Portfolio Pulse Contributors",
   "license": "MIT",
@@ -20,7 +23,8 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "lucide-react": "^0.475.0",
     "recharts": "^2.15.1",
-    "sql.js": "^1.12.0"
+    "sql.js": "^1.12.0",
+    "unpdf": "^1.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",

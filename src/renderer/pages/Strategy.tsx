@@ -1,15 +1,57 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BookTemplate, Eye, FileEdit, Pencil, Plus, Save, ShieldCheck, Trash2, X } from 'lucide-react';
-import { AppStatePayload, InsuranceCategory, InsurancePolicy, UserProfile } from '@shared/types';
+import {
+  BookTemplate,
+  CheckCircle2,
+  Eye,
+  FileCheck2,
+  FileEdit,
+  FileText,
+  FileUp,
+  Loader2,
+  Pencil,
+  Plus,
+  Save,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Upload,
+  X
+} from 'lucide-react';
+import {
+  AppStatePayload,
+  InsuranceCategory,
+  InsuranceDocument,
+  InsuranceDocumentType,
+  InsurancePolicy,
+  ParsedPolicySuggestion,
+  UserProfile
+} from '@shared/types';
 import { STRATEGY_TEMPLATES } from '@shared/constants';
 import { formatInrCompact, formatInrFull } from '../lib/format';
 import { MarkdownView } from '../components/MarkdownView';
+import { DocumentViewerModal } from '../components/DocumentViewerModal';
 
 interface StrategyProps {
   state: AppStatePayload;
   onSaveProfile: (partial: Partial<UserProfile>) => Promise<void>;
-  onSaveInsurancePolicy: (policy: InsurancePolicy) => Promise<void>;
+  onSaveInsurancePolicy: (
+    policy: InsurancePolicy,
+    pendingDoc?: { filePath: string; docType: InsuranceDocumentType; docDate?: string; notes?: string }
+  ) => Promise<void>;
   onDeleteInsurancePolicy: (id: number) => Promise<void>;
+  onUploadInsuranceDocument: (payload: {
+    policyId: number;
+    docType: InsuranceDocumentType;
+    docDate?: string;
+    notes?: string;
+  }) => Promise<{
+    canceled: boolean;
+    document?: InsuranceDocument;
+    parsedSuggestion?: ParsedPolicySuggestion;
+    error?: string;
+  }>;
+  onDeleteInsuranceDocument: (docId: number) => Promise<void>;
+  onOpenInsuranceDocumentExternal: (docId: number) => Promise<void>;
 }
 
 const INSURANCE_CATEGORIES: InsuranceCategory[] = [
@@ -35,18 +77,39 @@ export const Strategy: React.FC<StrategyProps> = ({
   state,
   onSaveProfile,
   onSaveInsurancePolicy,
-  onDeleteInsurancePolicy
+  onDeleteInsurancePolicy,
+  onUploadInsuranceDocument,
+  onDeleteInsuranceDocument,
+  onOpenInsuranceDocumentExternal
 }) => {
   const [form, setForm] = useState<UserProfile>(state.profile);
-  // Default to Preview mode so Strategy reads cleanly on first open; click document or Edit button to edit
   const [previewMode, setPreviewMode] = useState(true);
   const [saved, setSaved] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
 
-  // Insurance Policy Tracker state
+  // Insurance Policy Form + Auto-Parse state
   const [showPolicyForm, setShowPolicyForm] = useState(false);
   const [policyDraft, setPolicyDraft] = useState<InsurancePolicy>({ ...EMPTY_POLICY });
   const [policyError, setPolicyError] = useState<string | null>(null);
+  const [parsingDoc, setParsingDoc] = useState(false);
+  const [pendingDoc, setPendingDoc] = useState<{
+    filePath: string;
+    fileName: string;
+    parsedBy?: 'ai' | 'local_heuristic';
+    notice?: string;
+  } | null>(null);
+
+  // Per-policy upload & renewal suggestion banner state
+  const [uploadingForPolicyKey, setUploadingForPolicyKey] = useState<string | null>(null);
+  const [renewalUpdatePrompt, setRenewalUpdatePrompt] = useState<{
+    policy: InsurancePolicy;
+    fileName: string;
+    suggestedRenewalDate?: string;
+    suggestedPremium?: number;
+  } | null>(null);
+
+  // In-app document viewer modal state
+  const [viewingDoc, setViewingDoc] = useState<InsuranceDocument | null>(null);
 
   useEffect(() => {
     setForm(state.profile);
@@ -75,6 +138,45 @@ export const Strategy: React.FC<StrategyProps> = ({
     setPreviewMode(false);
   };
 
+  const handlePickAndParsePolicyDoc = async () => {
+    setPolicyError(null);
+    setParsingDoc(true);
+    try {
+      const res = await window.portfolioPulse.pickAndParseInsuranceDoc({ docType: 'policy' });
+      if (res.canceled) return;
+      if (res.error) {
+        setPolicyError(res.error);
+        return;
+      }
+
+      if (res.filePath && res.fileName) {
+        setPendingDoc({
+          filePath: res.filePath,
+          fileName: res.fileName,
+          parsedBy: res.parsedBy,
+          notice: res.notice
+        });
+      }
+
+      if (res.fields) {
+        const f = res.fields;
+        setPolicyDraft((prev) => ({
+          ...prev,
+          category: f.category || prev.category,
+          insurer: f.insurer || prev.insurer,
+          planName: f.planName || prev.planName,
+          sumAssured: f.sumAssured && f.sumAssured > 0 ? f.sumAssured : prev.sumAssured,
+          annualPremium: f.annualPremium && f.annualPremium > 0 ? f.annualPremium : prev.annualPremium,
+          renewalDate: f.renewalDate || prev.renewalDate,
+          paymentTerm: f.paymentTerm || prev.paymentTerm,
+          notes: f.notes || prev.notes
+        }));
+      }
+    } finally {
+      setParsingDoc(false);
+    }
+  };
+
   const handleSavePolicy = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!policyDraft.insurer.trim() || !policyDraft.planName.trim()) {
@@ -82,17 +184,68 @@ export const Strategy: React.FC<StrategyProps> = ({
       return;
     }
     setPolicyError(null);
-    await onSaveInsurancePolicy({
-      ...policyDraft,
-      sumAssured: Number(policyDraft.sumAssured) || 0,
-      annualPremium: Number(policyDraft.annualPremium) || 0
-    });
+    await onSaveInsurancePolicy(
+      {
+        ...policyDraft,
+        sumAssured: Number(policyDraft.sumAssured) || 0,
+        annualPremium: Number(policyDraft.annualPremium) || 0
+      },
+      pendingDoc
+        ? {
+            filePath: pendingDoc.filePath,
+            docType: 'policy',
+            docDate: policyDraft.renewalDate || new Date().toISOString().slice(0, 10)
+          }
+        : undefined
+    );
     setPolicyDraft({ ...EMPTY_POLICY });
+    setPendingDoc(null);
     setShowPolicyForm(false);
+  };
+
+  const handleUploadDocForPolicy = async (policy: InsurancePolicy, docType: InsuranceDocumentType) => {
+    if (!policy.id) return;
+    const key = `${policy.id}-${docType}`;
+    setUploadingForPolicyKey(key);
+    try {
+      const res = await onUploadInsuranceDocument({ policyId: policy.id, docType });
+      if (res.canceled || res.error) return;
+
+      if (docType === 'renewal' && res.parsedSuggestion?.fields) {
+        const f = res.parsedSuggestion.fields;
+        const newDate = f.renewalDate && f.renewalDate !== policy.renewalDate ? f.renewalDate : undefined;
+        const newPrem =
+          f.annualPremium && f.annualPremium > 0 && f.annualPremium !== policy.annualPremium
+            ? f.annualPremium
+            : undefined;
+        if (newDate || newPrem) {
+          setRenewalUpdatePrompt({
+            policy,
+            fileName: res.document?.fileName || 'renewal document',
+            suggestedRenewalDate: newDate,
+            suggestedPremium: newPrem
+          });
+        }
+      }
+    } finally {
+      setUploadingForPolicyKey(null);
+    }
+  };
+
+  const handleApplyRenewalUpdate = async () => {
+    if (!renewalUpdatePrompt) return;
+    const { policy, suggestedRenewalDate, suggestedPremium } = renewalUpdatePrompt;
+    await onSaveInsurancePolicy({
+      ...policy,
+      renewalDate: suggestedRenewalDate || policy.renewalDate,
+      annualPremium: suggestedPremium || policy.annualPremium
+    });
+    setRenewalUpdatePrompt(null);
   };
 
   const startEditPolicy = (policy: InsurancePolicy) => {
     setPolicyDraft({ ...policy });
+    setPendingDoc(null);
     setPolicyError(null);
     setShowPolicyForm(true);
   };
@@ -101,12 +254,14 @@ export const Strategy: React.FC<StrategyProps> = ({
     let termCover = 0;
     let healthCover = 0;
     let totalAnnualPremium = 0;
+    let totalDocs = 0;
     for (const p of state.insurancePolicies) {
       totalAnnualPremium += p.annualPremium;
       if (p.category === 'Term Life') termCover += p.sumAssured;
       if (p.category === 'Health') healthCover += p.sumAssured;
+      totalDocs += (p.documents || []).length;
     }
-    return { termCover, healthCover, totalAnnualPremium };
+    return { termCover, healthCover, totalAnnualPremium, totalDocs };
   }, [state.insurancePolicies]);
 
   return (
@@ -114,7 +269,7 @@ export const Strategy: React.FC<StrategyProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-            Strategy, Audit Rules &amp; Insurance Cover
+            Strategy, Audit Rules &amp; Insurance Vault
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Numeric thresholds drive deterministic alerts; your Strategy Markdown &amp; Insurance Policies feed directly into AI Reviews and Advisor Check.
@@ -209,7 +364,9 @@ export const Strategy: React.FC<StrategyProps> = ({
                 My Strategy &amp; Goals
               </h3>
               <p className="text-[11px] text-slate-400">
-                {previewMode ? 'Click anywhere inside the document or press Edit to customize.' : 'Editing Markdown — click Save Strategy when done.'}
+                {previewMode
+                  ? 'Click anywhere inside the document or press Edit to customize.'
+                  : 'Editing Markdown — click Save Strategy when done.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -267,35 +424,53 @@ export const Strategy: React.FC<StrategyProps> = ({
         </div>
       </div>
 
-      {/* Insurance & Protection Policies Tracker */}
+      {/* Insurance & Protection Policies Vault */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-surface-900">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
               <ShieldCheck className="h-4 w-4 text-emerald-500" />
-              Insurance &amp; Protection Policies ({state.insurancePolicies.length})
+              Insurance Policies &amp; Document Vault ({state.insurancePolicies.length})
             </h3>
             <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-              Track Term Life, Health, Endowment, ULIP, and other policies locally. Shared automatically with AI Reviews &amp; Advisor Check to evaluate cover gaps or policy pitches.
+              Upload policy PDFs or images to auto-fill policy details, view documents right inside the app, and archive yearly renewal receipts locally.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setPolicyDraft({ ...EMPTY_POLICY });
-              setPolicyError(null);
-              setShowPolicyForm((v) => !v);
-            }}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-500"
-          >
-            {showPolicyForm ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-            {showPolicyForm ? 'Close Form' : 'Add Policy'}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPolicyDraft({ ...EMPTY_POLICY });
+                setPendingDoc(null);
+                setPolicyError(null);
+                setShowPolicyForm(true);
+                void handlePickAndParsePolicyDoc();
+              }}
+              disabled={parsingDoc}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-500/20 disabled:opacity-50 dark:text-emerald-300"
+            >
+              {parsingDoc ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileUp className="h-3.5 w-3.5" />}
+              Upload Policy &amp; Auto-Fill
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPolicyDraft({ ...EMPTY_POLICY });
+                setPendingDoc(null);
+                setPolicyError(null);
+                setShowPolicyForm((v) => !v);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-500"
+            >
+              {showPolicyForm ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+              {showPolicyForm ? 'Close Form' : 'Add Policy'}
+            </button>
+          </div>
         </div>
 
         {/* Coverage Summary Pills */}
         {state.insurancePolicies.length > 0 && (
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
             <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-900/50">
               <div className="text-[11px] text-slate-500">Term Life Cover</div>
               <div className="mt-0.5 text-base font-bold tabular-nums text-slate-900 dark:text-white">
@@ -314,18 +489,109 @@ export const Strategy: React.FC<StrategyProps> = ({
                 {formatInrFull(insuranceTotals.totalAnnualPremium)}/yr
               </div>
             </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-slate-900/50">
+              <div className="text-[11px] text-slate-500">Vaulted Documents</div>
+              <div className="mt-0.5 text-base font-bold tabular-nums text-slate-900 dark:text-white">
+                {insuranceTotals.totalDocs} file{insuranceTotals.totalDocs === 1 ? '' : 's'} stored locally
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Add / Edit Policy Form */}
+        {/* Smart Renewal Auto-Update Prompt */}
+        {renewalUpdatePrompt && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-purple-500/30 bg-purple-500/10 p-3.5 text-xs text-purple-900 dark:text-purple-100">
+            <div className="flex items-start gap-2">
+              <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-purple-500" />
+              <div>
+                <span className="font-semibold">
+                  Parsed updated details from <code>{renewalUpdatePrompt.fileName}</code> for{' '}
+                  {renewalUpdatePrompt.policy.insurer} — {renewalUpdatePrompt.policy.planName}:
+                </span>{' '}
+                {[
+                  renewalUpdatePrompt.suggestedRenewalDate &&
+                    `Next Renewal: ${renewalUpdatePrompt.suggestedRenewalDate}`,
+                  renewalUpdatePrompt.suggestedPremium &&
+                    `Annual Premium: ${formatInrFull(renewalUpdatePrompt.suggestedPremium)}`
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleApplyRenewalUpdate()}
+                className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-purple-500"
+              >
+                Update Policy Fields
+              </button>
+              <button
+                type="button"
+                onClick={() => setRenewalUpdatePrompt(null)}
+                className="rounded-lg px-2.5 py-1.5 text-xs opacity-75 hover:opacity-100"
+              >
+                Keep Existing
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Add / Edit Policy Form with Auto-Parse Document Upload */}
         {showPolicyForm && (
           <form
             onSubmit={(e) => void handleSavePolicy(e)}
             className="mt-4 space-y-3 rounded-xl border border-emerald-500/30 bg-slate-50/80 p-4 dark:bg-slate-950/50"
           >
-            <div className="text-xs font-semibold text-slate-900 dark:text-white">
-              {policyDraft.id ? 'Edit Insurance Policy' : 'Add Insurance Policy'}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs font-semibold text-slate-900 dark:text-white">
+                {policyDraft.id ? 'Edit Insurance Policy' : 'Add Insurance Policy'}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handlePickAndParsePolicyDoc()}
+                disabled={parsingDoc}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-white px-3 py-1.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-500/10 disabled:opacity-50 dark:bg-slate-900 dark:text-emerald-300"
+              >
+                {parsingDoc ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Extracting policy details…
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-3.5 w-3.5" />
+                    {pendingDoc ? 'Choose Different Policy Doc' : 'Upload Policy PDF / Image to Auto-Fill'}
+                  </>
+                )}
+              </button>
             </div>
+
+            {pendingDoc && (
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-900 dark:text-emerald-100">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                    <span className="font-semibold">{pendingDoc.fileName}</span>
+                    <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-medium">
+                      {pendingDoc.parsedBy === 'ai' ? 'Auto-filled via AI' : 'Auto-filled via offline parser'}
+                    </span>
+                    <span className="opacity-80">(will be stored in your local vault on Save)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPendingDoc(null)}
+                    className="rounded p-0.5 hover:bg-emerald-500/20"
+                    title="Detach file"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {pendingDoc.notice && (
+                  <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">{pendingDoc.notice}</p>
+                )}
+              </div>
+            )}
+
             <div className="grid gap-3 md:grid-cols-3">
               <label className="block">
                 <span className="text-[11px] font-medium text-slate-500">Category</span>
@@ -398,7 +664,7 @@ export const Strategy: React.FC<StrategyProps> = ({
                   <input
                     value={policyDraft.renewalDate}
                     onChange={(e) => setPolicyDraft({ ...policyDraft, renewalDate: e.target.value })}
-                    placeholder="e.g., 15-Mar"
+                    placeholder="e.g., 15-Mar-2027"
                     className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   />
                 </div>
@@ -406,7 +672,9 @@ export const Strategy: React.FC<StrategyProps> = ({
             </div>
 
             <label className="block">
-              <span className="text-[11px] font-medium text-slate-500">Notes (Lock-in, riders, maturity year, nominee)</span>
+              <span className="text-[11px] font-medium text-slate-500">
+                Notes (Policy number, lock-in, riders, maturity year, nominee)
+              </span>
               <input
                 value={policyDraft.notes}
                 onChange={(e) => setPolicyDraft({ ...policyDraft, notes: e.target.value })}
@@ -423,6 +691,7 @@ export const Strategy: React.FC<StrategyProps> = ({
                 onClick={() => {
                   setShowPolicyForm(false);
                   setPolicyDraft({ ...EMPTY_POLICY });
+                  setPendingDoc(null);
                 }}
                 className="rounded-lg px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-800"
               >
@@ -438,86 +707,180 @@ export const Strategy: React.FC<StrategyProps> = ({
           </form>
         )}
 
-        {/* Saved Policies List */}
+        {/* Saved Policies List with Inline Document Vault & Renewal Upload */}
         {state.insurancePolicies.length === 0 ? (
           <div className="mt-4 rounded-xl border border-dashed border-slate-300 p-5 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
-            No insurance policies added yet. Click <strong>Add Policy</strong> to record Term Life, Health, ULIP, or Endowment policies so AI can check your overall protection cover.
+            No insurance policies added yet. Click <strong>Upload Policy &amp; Auto-Fill</strong> to parse a PDF/image automatically, or click <strong>Add Policy</strong> to enter manually.
           </div>
         ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-slate-200 text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                <tr>
-                  <th className="py-2.5 pr-3 font-medium">Category</th>
-                  <th className="px-3 py-2.5 font-medium">Insurer &amp; Plan</th>
-                  <th className="px-3 py-2.5 text-right font-medium">Sum Assured</th>
-                  <th className="px-3 py-2.5 text-right font-medium">Annual Premium</th>
-                  <th className="px-3 py-2.5 font-medium">Term / Renewal</th>
-                  <th className="py-2.5 pl-3 text-right font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 tabular-nums dark:divide-slate-800/70">
-                {state.insurancePolicies.map((p) => {
-                  const catBadge =
-                    p.category === 'Term Life'
-                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                      : p.category === 'Health'
-                      ? 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400'
-                      : p.category === 'ULIP' || p.category === 'Endowment / Guaranteed'
-                      ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                      : 'bg-slate-500/15 text-slate-600 dark:text-slate-300';
-                  return (
-                    <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
-                      <td className="py-3 pr-3">
+          <div className="mt-4 space-y-3">
+            {state.insurancePolicies.map((p) => {
+              const catBadge =
+                p.category === 'Term Life'
+                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                  : p.category === 'Health'
+                  ? 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400'
+                  : p.category === 'ULIP' || p.category === 'Endowment / Guaranteed'
+                  ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                  : 'bg-slate-500/15 text-slate-600 dark:text-slate-300';
+
+              const docs = p.documents || [];
+              const uploadingPolicy = uploadingForPolicyKey === `${p.id}-policy`;
+              const uploadingRenewal = uploadingForPolicyKey === `${p.id}-renewal`;
+
+              return (
+                <div
+                  key={p.id}
+                  className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-900/40"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${catBadge}`}>
                           {p.category}
                         </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="font-semibold text-slate-900 dark:text-white">
+                        <span className="text-xs font-semibold text-slate-900 dark:text-white">
                           {p.insurer} — {p.planName}
+                        </span>
+                      </div>
+                      {p.notes && (
+                        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{p.notes}</p>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-5 text-xs tabular-nums">
+                      <div className="text-right">
+                        <div className="text-[10px] text-slate-400">Sum Assured</div>
+                        <div className="font-semibold text-slate-900 dark:text-white">
+                          {p.sumAssured > 0 ? formatInrCompact(p.sumAssured) : '—'}
                         </div>
-                        {p.notes && <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{p.notes}</div>}
-                      </td>
-                      <td className="px-3 py-3 text-right font-semibold text-slate-900 dark:text-white">
-                        {p.sumAssured > 0 ? formatInrCompact(p.sumAssured) : '—'}
-                      </td>
-                      <td className="px-3 py-3 text-right text-slate-700 dark:text-slate-300">
-                        {formatInrFull(p.annualPremium)}
-                      </td>
-                      <td className="px-3 py-3 text-slate-500 dark:text-slate-400">
-                        {[p.paymentTerm, p.renewalDate && `Renews ${p.renewalDate}`].filter(Boolean).join(' · ') || '—'}
-                      </td>
-                      <td className="py-3 pl-3 text-right">
-                        <div className="inline-flex items-center gap-1.5">
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] text-slate-400">Annual Premium</div>
+                        <div className="font-medium text-slate-700 dark:text-slate-300">
+                          {formatInrFull(p.annualPremium)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] text-slate-400">Term / Renewal</div>
+                        <div className="text-slate-600 dark:text-slate-400">
+                          {[p.paymentTerm, p.renewalDate && `Renews ${p.renewalDate}`].filter(Boolean).join(' · ') || '—'}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => startEditPolicy(p)}
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                          title="Edit policy"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        {p.id && (
                           <button
                             type="button"
-                            onClick={() => startEditPolicy(p)}
-                            className="rounded p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-                            title="Edit policy"
+                            onClick={() => void onDeleteInsurancePolicy(p.id!)}
+                            className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-500/10 hover:text-rose-500"
+                            title="Delete policy & attached documents"
                           >
-                            <Pencil className="h-3.5 w-3.5" />
+                            <Trash2 className="h-3.5 w-3.5" />
                           </button>
-                          {p.id && (
-                            <button
-                              type="button"
-                              onClick={() => void onDeleteInsurancePolicy(p.id!)}
-                              className="rounded p-1 text-slate-400 hover:bg-rose-500/10 hover:text-rose-500"
-                              title="Delete policy"
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Attached Policy & Renewal Documents Strip */}
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200/80 pt-3 dark:border-slate-800/80">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {docs.length === 0 ? (
+                        <span className="text-[11px] text-slate-400">
+                          No policy or renewal documents uploaded yet.
+                        </span>
+                      ) : (
+                        docs.map((doc) => {
+                          const isRenewal = doc.docType === 'renewal';
+                          return (
+                            <div
+                              key={doc.id}
+                              className={`inline-flex items-center gap-1 rounded-lg border text-[11px] ${
+                                isRenewal
+                                  ? 'border-purple-500/30 bg-purple-500/10 text-purple-800 dark:text-purple-200'
+                                  : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200'
+                              }`}
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                              <button
+                                type="button"
+                                onClick={() => setViewingDoc(doc)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 hover:underline"
+                                title={`View ${doc.fileName} inside app`}
+                              >
+                                {isRenewal ? (
+                                  <FileCheck2 className="h-3.5 w-3.5 shrink-0 text-purple-500" />
+                                ) : (
+                                  <FileText className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                                )}
+                                <span className="font-semibold">
+                                  {isRenewal ? `Renewal${doc.docDate ? ` (${doc.docDate})` : ''}` : 'Policy Doc'}:
+                                </span>
+                                <span className="max-w-[180px] truncate">{doc.fileName}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void onDeleteInsuranceDocument(doc.id)}
+                                className="mr-1 rounded p-0.5 opacity-60 hover:bg-black/10 hover:opacity-100"
+                                title="Remove document from vault"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={uploadingPolicy || uploadingRenewal}
+                        onClick={() => void handleUploadDocForPolicy(p, 'policy')}
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                      >
+                        {uploadingPolicy ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <FileUp className="h-3 w-3 text-emerald-500" />
+                        )}
+                        + Policy Doc
+                      </button>
+                      <button
+                        type="button"
+                        disabled={uploadingPolicy || uploadingRenewal}
+                        onClick={() => void handleUploadDocForPolicy(p, 'renewal')}
+                        className="inline-flex items-center gap-1 rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-[11px] font-medium text-purple-700 hover:bg-purple-500/20 disabled:opacity-50 dark:text-purple-300"
+                      >
+                        {uploadingRenewal ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <FileCheck2 className="h-3 w-3 text-purple-500" />
+                        )}
+                        + Renewal Doc
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
+
+      {/* In-App Document Viewer Modal (PDFs, Images, Text) */}
+      <DocumentViewerModal
+        document={viewingDoc}
+        onClose={() => setViewingDoc(null)}
+        onOpenExternal={onOpenInsuranceDocumentExternal}
+      />
     </div>
   );
 };

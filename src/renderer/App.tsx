@@ -19,6 +19,7 @@ import {
   AppStatePayload,
   BrokerId,
   CsvImportResult,
+  InsuranceDocumentType,
   InsurancePolicy,
   SipBaselineItem,
   SymbolAlias,
@@ -178,14 +179,55 @@ export default function App() {
     );
   };
 
-  const handleSaveInsurancePolicy = async (policy: InsurancePolicy) => {
-    await window.portfolioPulse.saveInsurancePolicy(policy);
-    showToast('ok', `Saved policy: ${policy.insurer} — ${policy.planName}`);
+  const handleSaveInsurancePolicy = async (
+    policy: InsurancePolicy,
+    pendingDoc?: { filePath: string; docType: InsuranceDocumentType; docDate?: string; notes?: string }
+  ) => {
+    await window.portfolioPulse.saveInsurancePolicy(policy, pendingDoc);
+    showToast(
+      'ok',
+      pendingDoc
+        ? `Saved policy & vaulted document: ${policy.insurer} — ${policy.planName}`
+        : `Saved policy: ${policy.insurer} — ${policy.planName}`
+    );
   };
 
   const handleDeleteInsurancePolicy = async (id: number) => {
     await window.portfolioPulse.deleteInsurancePolicy(id);
-    showToast('ok', 'Removed insurance policy.');
+    showToast('ok', 'Removed insurance policy & attached documents.');
+  };
+
+  const handleUploadInsuranceDocument = async (payload: {
+    policyId: number;
+    docType: InsuranceDocumentType;
+    docDate?: string;
+    notes?: string;
+  }) => {
+    const res = await window.portfolioPulse.uploadInsuranceDocument(payload);
+    if (!res.canceled) {
+      if (res.error) {
+        showToast('err', res.error);
+      } else if (res.document) {
+        showToast(
+          'ok',
+          `Uploaded ${payload.docType === 'renewal' ? 'renewal' : 'policy'} doc: ${res.document.fileName}`
+        );
+      }
+    }
+    return res;
+  };
+
+  const handleDeleteInsuranceDocument = async (docId: number) => {
+    await window.portfolioPulse.deleteInsuranceDocument(docId);
+    showToast('ok', 'Removed document from local vault.');
+  };
+
+  const handleOpenInsuranceDocumentExternal = async (docId: number) => {
+    try {
+      await window.portfolioPulse.openInsuranceDocumentExternal(docId);
+    } catch (err) {
+      showToast('err', err instanceof Error ? err.message : 'Unable to open document.');
+    }
   };
 
   const handleSaveApiKey = async (provider: AIProviderId, apiKey: string) => {
@@ -204,6 +246,7 @@ export default function App() {
     topic: AdvisorTopic;
     advisorName?: string;
     pitchText: string;
+    attachmentPaths?: string[];
   }) => {
     return window.portfolioPulse.validateAdvisorInput(payload);
   };
@@ -467,6 +510,9 @@ export default function App() {
                 onSaveProfile={handleSaveProfile}
                 onSaveInsurancePolicy={handleSaveInsurancePolicy}
                 onDeleteInsurancePolicy={handleDeleteInsurancePolicy}
+                onUploadInsuranceDocument={handleUploadInsuranceDocument}
+                onDeleteInsuranceDocument={handleDeleteInsuranceDocument}
+                onOpenInsuranceDocumentExternal={handleOpenInsuranceDocumentExternal}
               />
             )}
             {tab === 'insights' && (

@@ -64,7 +64,38 @@ describe('LocalDatabase & PortfolioRepository (sql.js)', () => {
     expect(repo.getInsurancePolicies(false)).toHaveLength(1);
     repo.saveInsurancePolicy(false, { ...savedPol, annualPremium: 20500 });
     expect(repo.getInsurancePolicies(false)[0].annualPremium).toBe(20500);
-    repo.deleteInsurancePolicy(savedPol.id!);
+
+    // Test Insurance Policy & Renewal document vault records + cascade delete
+    const docPolicy = repo.addInsuranceDocument({
+      policyId: savedPol.id!,
+      docType: 'policy',
+      fileName: 'iprotect-policy.pdf',
+      storedRelPath: 'insurance/policy-3/iprotect-policy.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 245000,
+      docDate: '2025-09-01'
+    });
+    const docRenewal = repo.addInsuranceDocument({
+      policyId: savedPol.id!,
+      docType: 'renewal',
+      fileName: 'renewal-2026.pdf',
+      storedRelPath: 'insurance/policy-3/renewal-2026.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 118000,
+      docDate: '2026-09-01'
+    });
+    const withDocs = repo.getInsurancePolicies(false)[0].documents || [];
+    expect(withDocs).toHaveLength(2);
+    expect(withDocs[0].docType).toBe('policy');
+    expect(withDocs[1].docType).toBe('renewal');
+    expect(repo.getInsuranceDocumentWithPath(docPolicy.id)?.storedRelPath).toBe('insurance/policy-3/iprotect-policy.pdf');
+
+    const removedRenewalPath = repo.deleteInsuranceDocument(docRenewal.id);
+    expect(removedRenewalPath).toBe('insurance/policy-3/renewal-2026.pdf');
+    expect(repo.getInsurancePolicies(false)[0].documents).toHaveLength(1);
+
+    const cascadedPaths = repo.deleteInsurancePolicy(savedPol.id!);
+    expect(cascadedPaths).toEqual(['insurance/policy-3/iprotect-policy.pdf']);
     expect(repo.getInsurancePolicies(false)).toHaveLength(0);
     // Demo policies remain untouched
     expect(repo.getInsurancePolicies(true)).toHaveLength(2);

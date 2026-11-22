@@ -171,6 +171,7 @@ export function buildAdvisorValidationPrompt(input: {
   topic: AdvisorTopic;
   advisorName?: string;
   pitchText: string;
+  attachmentNames?: string[];
   contextBlock: string;
 }): string {
   const topicLabel = ADVISOR_TOPIC_LABELS[input.topic] || 'General Wealth / Advisor Pitch';
@@ -178,24 +179,35 @@ export function buildAdvisorValidationPrompt(input: {
     ? `**Advisor / Institution:** ${input.advisorName.trim()}`
     : '**Advisor / Institution:** External advisor / RM / agent (unspecified)';
 
+  const attachmentsLine =
+    input.attachmentNames && input.attachmentNames.length > 0
+      ? `**Attached Supporting Documents:** ${input.attachmentNames.join(', ')}\n*(Carefully read every figure, illustration table, premium schedule, fund name, expense ratio, lock-in, and fine-print clause inside the attached document(s)!)*`
+      : '';
+
+  const pitchBody = input.pitchText.trim()
+    ? input.pitchText.trim()
+    : '*(No additional text notes provided — please review the attached document(s) above in full.)*';
+
   return `The investor wants an objective, critical **Second Opinion** on an external recommendation they received.
 
 **Topic Category:** ${topicLabel}
 ${sourceLine}
+${attachmentsLine}
 
 ### Recommendation / Pitch Received by Investor
-${input.pitchText.trim()}
+${pitchBody}
 
 ---
 
-Evaluate this recommendation thoroughly **against the investor's actual live portfolio, insurance policies, and personal strategy below**. Be candid, protective of the investor's interests, and check carefully for common Indian retail wealth-management pitfalls (e.g., Regular vs. Direct mutual fund trail commissions, unnecessary NFOs/sectoral funds, endowment/guaranteed/ULIP plans with low 4–6% effective IRR or high lock-in vs. Pure Term + Index Fund, duplicating existing holdings, violating emergency buffer, or misaligning with stated goals).
+Evaluate this recommendation (including all attached brochures, illustrations, quotes, or screenshots) thoroughly **against the investor's actual live portfolio, insurance policies, and personal strategy below**. Be candid, protective of the investor's interests, and check carefully for common Indian retail wealth-management pitfalls (e.g., Regular vs. Direct mutual fund trail commissions, unnecessary NFOs/sectoral funds, endowment/guaranteed/ULIP plans with low 4–6% effective IRR or high lock-in vs. Pure Term + Index Fund, duplicating existing holdings, violating emergency buffer, or misaligning with stated goals).
 
 Structure your Markdown response with these exact sections:
 1. **Second-Opinion Verdict** — State clearly whether this looks **Well-Aligned**, **Needs Caution / Clarification**, or **Likely Conflict / Poor Fit**, with a 2–3 sentence rationale.
-2. **Impact on Your Live Portfolio & Coverage** — Reference specific existing holdings, allocation weights, bonds/SGBs, cash buffer, or insurance policies from the context below.
-3. **Hidden Costs, Lock-ins & Trade-offs to Check** — Call out expense ratios, Regular vs. Direct, lock-in periods, surrender penalties, tax treatment (LTCG/STCG/10(10D)), or realistic expected IRR.
-4. **Alternative Options to Compare** — Give 1–2 simpler, lower-cost educational benchmarks to compare against (where relevant).
-5. **5 Sharp Questions to Ask Your Advisor Before Deciding** — Concrete, polite questions the investor can copy-paste or ask verbatim.
+2. **Key Numbers & Fine Print Extracted From the Pitch / Attachments** — Summarize the exact amounts, tenures, premiums, expected IRR/returns, fund names, or clauses found in the recommendation/files.
+3. **Impact on Your Live Portfolio & Coverage** — Reference specific existing holdings, allocation weights, bonds/SGBs, cash buffer, or insurance policies from the context below.
+4. **Hidden Costs, Lock-ins & Trade-offs to Check** — Call out expense ratios, Regular vs. Direct, lock-in periods, surrender penalties, tax treatment (LTCG/STCG/10(10D)), or realistic expected IRR.
+5. **Alternative Options to Compare** — Give 1–2 simpler, lower-cost educational benchmarks to compare against (where relevant).
+6. **5 Sharp Questions to Ask Your Advisor Before Deciding** — Concrete, polite questions the investor can copy-paste or ask verbatim.
 
 End with a brief one-line reminder that this is an educational AI second opinion, not regulated SEBI/IRDAI advice.
 
@@ -204,4 +216,20 @@ End with a brief one-line reminder that this is an educational AI second opinion
 ### Investor's Live Portfolio, Policies & Strategy Context
 
 ${input.contextBlock}`;
+}
+
+export function buildInsuranceExtractionPrompt(fileName: string, docType: 'policy' | 'renewal'): string {
+  return `Extract structured Indian insurance policy details from the attached ${docType === 'renewal' ? 'renewal receipt / renewal schedule' : 'policy document'} ("${fileName}").
+
+Return ONLY a valid JSON object (no markdown fences, no commentary) with these exact keys:
+{
+  "category": "Term Life" | "Health" | "Endowment / Guaranteed" | "ULIP" | "Vehicle / Other",
+  "insurer": "string (e.g. HDFC Life, HDFC Ergo, LIC, ICICI Prudential, Niva Bupa, Star Health)",
+  "planName": "string (exact product / plan name)",
+  "sumAssured": number (total Sum Assured / Base Cover in INR as plain integer, e.g. 10000000 for 1 Cr or 1500000 for 15L; 0 if not found),
+  "annualPremium": number (annualized total premium incl. GST in INR as plain integer; 0 if not found),
+  "renewalDate": "string (next renewal / due / expiry date formatted cleanly e.g. '15-Mar-2027' or '15-Mar'; empty string if not found)",
+  "paymentTerm": "string (e.g. 'Annual', '10 Years PPT / 30 Years Term', 'Regular Pay till Age 60'; empty string if not found)",
+  "notes": "string (concise 1-line summary: Policy Number, riders, family members covered, waiting periods, or maturity year if present)"
+}`;
 }

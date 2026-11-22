@@ -20,11 +20,11 @@ A **local-first, open-source Electron desktop app** for Indian retail investors 
   - **Manual Avg Cost Editing & Smart Multi-Broker CSV Import:** Click any **Avg Cost** cell to edit inline, or import holdings CSVs from **Paytm Money Web (`Holdings → Download CSV`), Zerodha Console/Kite, Groww, Upstox, Angel One, ICICI Direct**, or any custom CSV — with automatic broker detection, split-broker partial-quantity notices, unmatched row diagnostics, and persistence across future daily syncs.
 - **Separate SIPs & Insights/Alerts Architecture:**
   - Dedicated **SIPs** view merges and deduplicates active SIPs across INDmoney and Upstox (with a clean lump-sum empty state if you don't run SIPs).
-  - **Insights & Alerts** combines filterable daily deterministic Audit Alerts, archived **Past AI Reviews**, and an **Advisor Check (Second Opinion)** tool to validate advisor/RM/agent pitches on stocks, MFs, insurance/ULIPs, or loans against your live portfolio & policies.
+  - **Insights & Alerts** combines filterable daily deterministic Audit Alerts, archived **Past AI Reviews**, and an **Advisor Check (Second Opinion)** tool where you can paste pitches **and attach supporting PDFs, brochures, quotes, or screenshots** for AI validation against your live portfolio & policies.
 - **Daily Refresh & Native Desktop Notifications:**
   - Menu-bar / system tray resident scheduler (default **21:30 local time**, after NSE close and AMFI NAV publishing) with wake-from-sleep catch-up.
-- **Strategy Templates, Insurance Tracker & BYOK AI:**
-  - Preview-by-default Markdown **Strategy & Goals** with built-in Indian investor **Strategy Templates** plus a local **Insurance & Protection Policies Tracker** (Term Life, Health, Endowment, ULIP, Vehicle/Other) fed directly into AI context and exports.
+- **Strategy Templates, Insurance Document Vault & BYOK AI:**
+  - Preview-by-default Markdown **Strategy & Goals** with built-in Indian investor **Strategy Templates** plus a local **Insurance Policies & Document Vault** (Term Life, Health, Endowment, ULIP, Vehicle/Other) — upload policy PDFs/images to **auto-parse details** (via AI or offline Indian insurance heuristics), **preview PDFs/images right inside the app**, and archive yearly **renewal receipts** with 1-click renewal date/premium updates.
   - Configure **Anthropic Claude**, **Google Gemini**, **OpenAI / OpenAI-compatible**, or **Local Ollama** under **Settings → AI Insights Configuration** with step-by-step API key setup guides and automatic **live model discovery**.
   - Open the **floating Ask AI Q&A chat** from any screen in the app.
 - **Demo Mode & Data Portability:**
@@ -52,7 +52,7 @@ Because early preview releases are not yet Apple-notarized / Authenticode-signed
 
 ## Development Setup
 
-Requires Node.js 20+.
+Requires Node.js 26 LTS (see [.nvmrc](./.nvmrc)).
 
 ```bash
 npm install
