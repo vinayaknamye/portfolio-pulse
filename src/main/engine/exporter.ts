@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { AuditAlert, PortfolioSnapshot, UserProfile } from '@shared/types';
+import { AuditAlert, InsurancePolicy, PortfolioSnapshot, UserProfile } from '@shared/types';
 import { NON_ADVISORY_DISCLAIMER } from '@shared/constants';
 
 function formatLakh(val: number): string {
@@ -14,13 +14,16 @@ function formatCr(val: number): string {
 export function generatePortfolioMarkdown(
   snapshot: PortfolioSnapshot,
   alerts: AuditAlert[],
-  profile: UserProfile
+  profile: UserProfile,
+  insurancePolicies: InsurancePolicy[] = []
 ): string {
   const lines: string[] = [];
+  const ownerPrefix = profile.displayName?.trim() ? `${profile.displayName.trim()} — ` : '';
 
-  lines.push(`# Portfolio Pulse — Snapshot (${snapshot.snapshotDate})`);
+  lines.push(`# ${ownerPrefix}Portfolio Pulse Snapshot (${snapshot.snapshotDate})`);
   lines.push('');
-  lines.push(`**Fetched At:** ${snapshot.fetchedAt} · **Mode:** ${snapshot.isDemo ? 'Demo Portfolio' : 'Live MCP'} · **Upstox Status:** ${snapshot.upstoxState}`);
+  const upstoxMeta = snapshot.upstoxState !== 'not_linked' ? ` · **Upstox Status:** ${snapshot.upstoxState}` : '';
+  lines.push(`**Fetched At:** ${snapshot.fetchedAt} · **Mode:** ${snapshot.isDemo ? 'Demo Portfolio' : 'Live MCP'}${upstoxMeta}`);
   lines.push('');
   lines.push(`> ${NON_ADVISORY_DISCLAIMER}`);
   lines.push('');
@@ -36,7 +39,9 @@ export function generatePortfolioMarkdown(
   lines.push(`| **Total Liabilities** | ₹${snapshot.totalLiabilities.toLocaleString('en-IN')} |`);
   lines.push(`| **Emergency Cushion (Arbitrage + SA)** | ${formatLakh(snapshot.emergencyCushionTotal)} (Target: ${formatLakh(profile.emergencyTarget)}) |`);
   lines.push(`| **Liquid Fund Corpus** | ${formatLakh(snapshot.liquidCorpusTotal)} |`);
-  lines.push(`| **Upstox Available Margin** | ₹${snapshot.upstoxAvailableMargin.toLocaleString('en-IN', { maximumFractionDigits: 2 })} |`);
+  if (snapshot.upstoxState !== 'not_linked') {
+    lines.push(`| **Upstox Available Margin** | ₹${snapshot.upstoxAvailableMargin.toLocaleString('en-IN', { maximumFractionDigits: 2 })} |`);
+  }
   lines.push('');
   lines.push('### Asset Allocation');
   lines.push('');
@@ -50,21 +55,38 @@ export function generatePortfolioMarkdown(
   lines.push('');
   lines.push('---');
   lines.push('');
-  lines.push(`## 2. Direct Holdings (${snapshot.equities.length})`);
+  lines.push(`## 2. Direct Equities (${snapshot.equities.length})`);
   lines.push('');
-  lines.push('| Symbol | Name | Broker | Qty | Avg Price | LTP | Value | P&L % |');
-  lines.push('|---|---|---|---:|---:|---:|---:|---:|');
+  lines.push('| Name | Broker | Qty | Avg Price | LTP | Value | P&L % |');
+  lines.push('|---|---|---:|---:|---:|---:|---:|');
   for (const e of snapshot.equities) {
     const avgStr = e.averagePrice !== null ? `₹${e.averagePrice.toFixed(2)}` : 'N/A';
     const pnlStr = e.costBasisSource === 'market_value_proxy' ? 'N/A' : `${e.pnlPct >= 0 ? '+' : ''}${e.pnlPct.toFixed(1)}%`;
     lines.push(
-      `| ${e.symbol} | ${e.name} | ${e.broker} | ${e.quantity} | ${avgStr} | ₹${e.lastPrice.toFixed(2)} | ${formatLakh(e.currentValue)} | ${pnlStr} |`
+      `| ${e.name} | ${e.broker} | ${e.quantity} | ${avgStr} | ₹${e.lastPrice.toFixed(2)} | ${formatLakh(e.currentValue)} | ${pnlStr} |`
     );
   }
   lines.push('');
+  const bonds = snapshot.bonds || [];
+  if (bonds.length > 0) {
+    lines.push('---');
+    lines.push('');
+    lines.push(`## 3. Bonds & SGBs (${bonds.length})`);
+    lines.push('');
+    lines.push('| Instrument | Type | Broker | Qty | Avg Price | LTP | Value | P&L % |');
+    lines.push('|---|---|---|---:|---:|---:|---:|---:|');
+    for (const b of bonds) {
+      const avgStr = b.averagePrice !== null ? `₹${b.averagePrice.toFixed(2)}` : 'N/A';
+      const pnlStr = b.costBasisSource === 'market_value_proxy' ? 'N/A' : `${b.pnlPct >= 0 ? '+' : ''}${b.pnlPct.toFixed(1)}%`;
+      lines.push(
+        `| ${b.name} | ${b.bondType} | ${b.broker} | ${b.quantity} | ${avgStr} | ₹${b.lastPrice.toFixed(2)} | ${formatLakh(b.currentValue)} | ${pnlStr} |`
+      );
+    }
+    lines.push('');
+  }
   lines.push('---');
   lines.push('');
-  lines.push(`## 3. Mutual Funds (${snapshot.mutualFunds.length}) & Active SIPs (${snapshot.activeSips.length})`);
+  lines.push(`## 4. Mutual Funds (${snapshot.mutualFunds.length}) & Active SIPs (${snapshot.activeSips.length})`);
   lines.push('');
   lines.push('| Fund | Units | NAV | Invested | Current | P&L % |');
   lines.push('|---|---:|---:|---:|---:|---:|');
@@ -86,9 +108,23 @@ export function generatePortfolioMarkdown(
     }
     lines.push('');
   }
+  if (insurancePolicies.length > 0) {
+    lines.push('---');
+    lines.push('');
+    lines.push(`## 5. Insurance & Protection Policies (${insurancePolicies.length})`);
+    lines.push('');
+    lines.push('| Category | Insurer | Plan | Sum Assured | Annual Premium | Term | Renewal |');
+    lines.push('|---|---|---|---:|---:|---|---|');
+    for (const p of insurancePolicies) {
+      lines.push(
+        `| ${p.category} | ${p.insurer} | ${p.planName} | ${formatLakh(p.sumAssured)} | ₹${p.annualPremium.toLocaleString('en-IN')} | ${p.paymentTerm || '—'} | ${p.renewalDate || '—'} |`
+      );
+    }
+    lines.push('');
+  }
   lines.push('---');
   lines.push('');
-  lines.push(`## 4. Audit Alerts (${alerts.length})`);
+  lines.push(`## 6. Audit Alerts (${alerts.length})`);
   lines.push('');
   if (alerts.length === 0) {
     lines.push('- No active alerts — all portfolio checks passed.');
@@ -100,7 +136,7 @@ export function generatePortfolioMarkdown(
   lines.push('');
   lines.push('---');
   lines.push('');
-  lines.push('## 5. Personal Strategy & Goals');
+  lines.push('## 7. Personal Strategy & Goals');
   lines.push('');
   lines.push(profile.strategyMarkdown);
   lines.push('');
@@ -112,7 +148,8 @@ export function exportPortfolioBundle(
   targetDir: string,
   snapshot: PortfolioSnapshot,
   alerts: AuditAlert[],
-  profile: UserProfile
+  profile: UserProfile,
+  insurancePolicies: InsurancePolicy[] = []
 ): { directory: string; files: string[] } {
   const bundleDir = path.join(targetDir, `portfolio-pulse-export-${snapshot.snapshotDate}`);
   fs.mkdirSync(bundleDir, { recursive: true });
@@ -124,9 +161,10 @@ export function exportPortfolioBundle(
     files.push(full);
   };
 
-  write('PORTFOLIO_SNAPSHOT.md', generatePortfolioMarkdown(snapshot, alerts, profile));
+  write('PORTFOLIO_SNAPSHOT.md', generatePortfolioMarkdown(snapshot, alerts, profile, insurancePolicies));
   write('snapshot.json', JSON.stringify(snapshot, null, 2));
   write('alerts.json', JSON.stringify(alerts, null, 2));
+  write('insurance_policies.json', JSON.stringify(insurancePolicies, null, 2));
   write('strategy.md', profile.strategyMarkdown);
 
   return { directory: bundleDir, files };

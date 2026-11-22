@@ -116,8 +116,23 @@ export class LocalDatabase {
         isin TEXT,
         broker TEXT,
         average_price REAL NOT NULL,
+        csv_qty REAL,
+        csv_current_price REAL,
         source TEXT NOT NULL DEFAULT 'manual',
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS insurance_policies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        is_demo INTEGER NOT NULL DEFAULT 0,
+        category TEXT NOT NULL,
+        insurer TEXT NOT NULL,
+        plan_name TEXT NOT NULL,
+        sum_assured REAL NOT NULL DEFAULT 0,
+        annual_premium REAL NOT NULL DEFAULT 0,
+        renewal_date TEXT NOT NULL DEFAULT '',
+        payment_term TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT ''
       );
 
       CREATE TABLE IF NOT EXISTS ai_reports (
@@ -138,6 +153,17 @@ export class LocalDatabase {
         created_at TEXT NOT NULL
       );
     `);
+
+    // Additive column migration for existing v0.1.0 databases
+    const overrideCols = new Set(
+      this.all<{ name: string }>('PRAGMA table_info(cost_basis_overrides)').map((c) => c.name)
+    );
+    if (!overrideCols.has('csv_qty')) {
+      this.db.run('ALTER TABLE cost_basis_overrides ADD COLUMN csv_qty REAL');
+    }
+    if (!overrideCols.has('csv_current_price')) {
+      this.db.run('ALTER TABLE cost_basis_overrides ADD COLUMN csv_current_price REAL');
+    }
   }
 
   save(): void {

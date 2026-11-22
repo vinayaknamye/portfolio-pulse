@@ -14,19 +14,19 @@ A **local-first, open-source Electron desktop app** for Indian retail investors 
   - **Upstox MCP (Demat Stocks, MFs, SIPs & Margin):** Live demat equity average buy prices, accurate unrealized P&L, Upstox MF holdings & active MF SIPs, idle trading margin, and automatic ISIN-based non-equity bond/NCD separation.
   - **Works Standalone or Combined:** Connect INDmoney only, Upstox only, or both together. *(Tip: For the most complete net-worth view across all asset classes and external brokers, link/record all assets inside INDmoney first.)*
   - **Resilient Partial Sync:** If Upstox's OAuth session expires during a background daily refresh, INDmoney still syncs cleanly while carrying forward your last known Upstox cost basis and firing a 1-click OS notification to reconnect.
-- **Smart Holdings Reconciliation & Avg Cost Overrides:**
-  - Zero-config NSE/BSE matching (ISIN → user alias → abbreviation & acronym matching → unambiguous qty/price fallback) + 1-click symbol alias mapper.
-  - Preserves native INDmoney cost basis when available.
-  - **Manual Avg Cost Editing & Multi-Broker CSV Import:** Click any **Avg Cost** cell in Holdings to edit inline, or click **Import Avg Cost CSV** to bulk-import average buy prices from **Paytm Money, Zerodha Console/Kite, Groww, Upstox, Angel One, ICICI Direct**, or any custom CSV — persisted across all future daily syncs.
-- **Unified Multi-Broker SIP & Cashflow Audit (Free, Offline):**
-  - Merges and deduplicates active SIPs across INDmoney (MF + Stock SIPs) and Upstox (active MF SIPs, filtering out cancelled/completed mandates).
-  - Daily checks for day-over-day net worth delta, idle broker cash, Savings Account runway ahead of upcoming SIP debits, SIP baseline drift, emergency cushion progress, deep drawdowns, and single-stock concentration.
+- **Dedicated Direct Equities, Bonds & SGBs, and Mutual Funds Views:**
+  - Automatically separates Sovereign Gold Bonds (SGBs), Corporate NCDs, G-Secs, and Bonds into a dedicated **Bonds & SGBs** tab with inline Avg Cost editing and CSV support.
+  - Zero-config NSE/BSE matching (ISIN → user alias → abbreviation, subset-token & acronym matching → unambiguous LTP + quantity fallback) + 1-click symbol alias mapper.
+  - **Manual Avg Cost Editing & Smart Multi-Broker CSV Import:** Click any **Avg Cost** cell to edit inline, or import holdings CSVs from **Paytm Money Web (`Holdings → Download CSV`), Zerodha Console/Kite, Groww, Upstox, Angel One, ICICI Direct**, or any custom CSV — with automatic broker detection, split-broker partial-quantity notices, unmatched row diagnostics, and persistence across future daily syncs.
+- **Separate SIPs & Insights/Alerts Architecture:**
+  - Dedicated **SIPs** view merges and deduplicates active SIPs across INDmoney and Upstox (with a clean lump-sum empty state if you don't run SIPs).
+  - **Insights & Alerts** combines filterable daily deterministic Audit Alerts, archived **Past AI Reviews**, and an **Advisor Check (Second Opinion)** tool to validate advisor/RM/agent pitches on stocks, MFs, insurance/ULIPs, or loans against your live portfolio & policies.
 - **Daily Refresh & Native Desktop Notifications:**
   - Menu-bar / system tray resident scheduler (default **21:30 local time**, after NSE close and AMFI NAV publishing) with wake-from-sleep catch-up.
-- **Hybrid Strategy + BYOK AI Insights & Global Floating Chat:**
-  - Combine structured numeric audit thresholds with a freeform Markdown **My Strategy & Goals** editor.
-  - Configure **Anthropic Claude**, **Google Gemini**, **OpenAI / OpenAI-compatible**, or **Local Ollama** under **Settings → AI Insights Configuration** with automatic **live model discovery** from each provider's API.
-  - View archived structured reports in **AI Insights**, and open the **floating Ask AI Q&A chat** from any screen in the app.
+- **Strategy Templates, Insurance Tracker & BYOK AI:**
+  - Preview-by-default Markdown **Strategy & Goals** with built-in Indian investor **Strategy Templates** plus a local **Insurance & Protection Policies Tracker** (Term Life, Health, Endowment, ULIP, Vehicle/Other) fed directly into AI context and exports.
+  - Configure **Anthropic Claude**, **Google Gemini**, **OpenAI / OpenAI-compatible**, or **Local Ollama** under **Settings → AI Insights Configuration** with step-by-step API key setup guides and automatic **live model discovery**.
+  - Open the **floating Ask AI Q&A chat** from any screen in the app.
 - **Demo Mode & Data Portability:**
   - Evaluate the entire app risk-free via **Try Demo Portfolio First** (synthetic 14-day Indian portfolio), and export snapshots anytime as a Markdown + JSON bundle.
 

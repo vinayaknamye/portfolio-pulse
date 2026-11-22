@@ -232,7 +232,13 @@ export class SyncOrchestrator {
     }
 
     try {
-      const contextBlock = buildPortfolioContextBlock(snapshot, previous, alerts, profile);
+      const contextBlock = buildPortfolioContextBlock(
+        snapshot,
+        previous,
+        alerts,
+        profile,
+        repo.getInsurancePolicies(false)
+      );
       const completion = await runLLMCompletion({
         provider: profile.aiProvider,
         model: profile.aiModel,

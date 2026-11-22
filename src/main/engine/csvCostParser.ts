@@ -50,6 +50,7 @@ interface DetectedColumns {
   symbolIdx: number;
   isinIdx: number;
   avgPriceIdx: number;
+  currentPriceIdx: number;
   investedIdx: number;
   qtyIdx: number;
   brokerIdx: number;
@@ -100,6 +101,17 @@ const AVG_PRICE_HEADERS = [
   'avg'
 ];
 
+const CURRENT_PRICE_HEADERS = [
+  'current price',
+  'ltp',
+  'last price',
+  'market price',
+  'cmp',
+  'close price',
+  'closing price',
+  'prev close'
+];
+
 const INVESTED_HEADERS = [
   'invested',
   'invested amount',
@@ -113,6 +125,23 @@ const INVESTED_HEADERS = [
 
 const QTY_HEADERS = ['qty', 'quantity', 'units', 'total units', 'shares', 'net qty', 'available qty', 'quantity available'];
 const BROKER_HEADERS = ['broker', 'platform', 'source'];
+
+export function inferBrokerFromFilename(fileName?: string): string | undefined {
+  if (!fileName) return undefined;
+  const lower = fileName.toLowerCase();
+  if (lower.includes('paytm')) return 'Paytm Money';
+  if (lower.includes('zerodha') || lower.includes('kite')) return 'Zerodha';
+  if (lower.includes('groww')) return 'Groww';
+  if (lower.includes('upstox') || lower.includes('rksv')) return 'Upstox';
+  if (lower.includes('angel')) return 'Angel One';
+  if (lower.includes('icici')) return 'ICICI Direct';
+  if (lower.includes('hdfc')) return 'HDFC Securities';
+  if (lower.includes('kotak')) return 'Kotak Securities';
+  if (lower.includes('pinnacle')) return 'Pinnacle';
+  if (lower.includes('dhan')) return 'Dhan';
+  if (lower.includes('indmoney')) return 'INDmoney';
+  return undefined;
+}
 
 function findCol(headers: string[], candidates: string[]): number {
   // Exact normalized header match first
@@ -138,6 +167,7 @@ function detectHeaderRow(lines: string[]): DetectedColumns | null {
     const symbolIdx = findCol(cols, SYMBOL_HEADERS);
     const isinIdx = findCol(cols, ISIN_HEADERS);
     const avgPriceIdx = findCol(cols, AVG_PRICE_HEADERS);
+    const currentPriceIdx = findCol(cols, CURRENT_PRICE_HEADERS);
     const investedIdx = findCol(cols, INVESTED_HEADERS);
     const qtyIdx = findCol(cols, QTY_HEADERS);
     const brokerIdx = findCol(cols, BROKER_HEADERS);
@@ -152,6 +182,7 @@ function detectHeaderRow(lines: string[]): DetectedColumns | null {
         symbolIdx,
         isinIdx,
         avgPriceIdx,
+        currentPriceIdx,
         investedIdx,
         qtyIdx,
         brokerIdx
@@ -196,12 +227,15 @@ export function parseBrokerHoldingsCsv(csvText: string, defaultBroker?: string):
     if (!idCheck && !rawIsin) continue;
     if (/^(total|grand total|summary|disclaimer|generated on)\b/i.test(idCheck)) continue;
 
+    const parsedQty = detected.qtyIdx !== -1 ? parseNumberCell(row[detected.qtyIdx]) : NaN;
+    const parsedCurrentPrice =
+      detected.currentPriceIdx !== -1 ? parseNumberCell(row[detected.currentPriceIdx]) : NaN;
+
     let avgPrice = detected.avgPriceIdx !== -1 ? parseNumberCell(row[detected.avgPriceIdx]) : NaN;
     if (!Number.isFinite(avgPrice) || avgPrice <= 0) {
       const inv = detected.investedIdx !== -1 ? parseNumberCell(row[detected.investedIdx]) : NaN;
-      const qty = detected.qtyIdx !== -1 ? parseNumberCell(row[detected.qtyIdx]) : NaN;
-      if (Number.isFinite(inv) && Number.isFinite(qty) && inv > 0 && qty > 0) {
-        avgPrice = inv / qty;
+      if (Number.isFinite(inv) && Number.isFinite(parsedQty) && inv > 0 && parsedQty > 0) {
+        avgPrice = inv / parsedQty;
       }
     }
 
@@ -210,18 +244,28 @@ export function parseBrokerHoldingsCsv(csvText: string, defaultBroker?: string):
     const cleanIsin = /^[A-Z]{2}[A-Z0-9]{10}$/.test(rawIsin) ? rawIsin : undefined;
     const cleanSymbol = rawSymbol.trim().toUpperCase() || undefined;
     const displayName = (rawName || rawSymbol || cleanIsin || '').trim();
-    const holdingKey =
+    const effectiveBroker = rawBroker.trim() || defaultBroker || undefined;
+    // Use raw alphanumeric slug for CSV deduplication so distinct names (e.g., "Oil India" vs "Indian Oil Corp") never collide
+    const rawNameSlug = displayName.toLowerCase().replace(/[^a-z0-9]/g, '') || normalizeCompact(displayName);
+    const baseKey =
       (cleanIsin && `isin:${cleanIsin.toLowerCase()}`) ||
       (cleanSymbol && `sym:${cleanSymbol.toLowerCase()}`) ||
-      `name:${normalizeCompact(displayName)}`;
+      `name:${rawNameSlug}`;
+    const brokerSlug = effectiveBroker ? effectiveBroker.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+    const holdingKey = brokerSlug ? `${baseKey}@${brokerSlug}` : baseKey;
 
     deduped.set(holdingKey, {
       holdingKey,
       displayName,
       symbol: cleanSymbol,
       isin: cleanIsin,
-      broker: rawBroker.trim() || defaultBroker,
+      broker: effectiveBroker,
       averagePrice: Math.round((avgPrice + Number.EPSILON) * 100) / 100,
+      csvQty: Number.isFinite(parsedQty) && parsedQty > 0 ? Math.round((parsedQty + Number.EPSILON) * 10000) / 10000 : undefined,
+      csvCurrentPrice:
+        Number.isFinite(parsedCurrentPrice) && parsedCurrentPrice > 0
+          ? Math.round((parsedCurrentPrice + Number.EPSILON) * 100) / 100
+          : undefined,
       source: 'csv_import',
       updatedAt: now
     });

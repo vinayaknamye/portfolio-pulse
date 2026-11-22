@@ -205,10 +205,25 @@ export interface RawUpstoxMfSip {
   pending_instalments?: number;
 }
 
+export interface RawIndmoneyBond {
+  investment: string;
+  investment_code?: string;
+  isin?: string | null;
+  broker?: string | null;
+  total_units?: number;
+  unit_price?: number;
+  invested_amount?: number | string | null;
+  market_value?: number;
+  total_pnl?: number;
+  pnl_per?: number;
+  assetclass_l2?: string | null;
+}
+
 export interface IndmoneyFetchPayload {
   networth: RawIndmoneyNetworth;
   stocks: RawIndmoneyStock[];
   mutualFunds: RawIndmoneyMF[];
+  bonds?: RawIndmoneyBond[];
   mfSips: RawIndmoneySipItem[];
   stockSips: RawIndmoneyStockSipItem[];
 }
@@ -248,6 +263,7 @@ export interface ReconciledEquity {
     | 'manual_override'
     | 'csv_import'
     | 'market_value_proxy';
+  partialCostBasisNote?: string;
   matchStatus:
     | 'matched'
     | 'external'
@@ -260,6 +276,44 @@ export interface ReconciledEquity {
   indmoneyValue?: number;
   upstoxValue?: number;
 }
+
+export interface ReconciledBond {
+  id: string;
+  name: string;
+  symbol: string;
+  isin: string;
+  bondType: 'SGB' | 'NCD' | 'G-Sec' | 'Bond';
+  broker: string;
+  quantity: number;
+  averagePrice: number | null;
+  lastPrice: number;
+  investedValue: number;
+  currentValue: number;
+  pnl: number;
+  pnlPct: number;
+  costBasisSource:
+    | 'upstox_live'
+    | 'indmoney_native'
+    | 'manual_override'
+    | 'csv_import'
+    | 'market_value_proxy';
+}
+
+export type InsuranceCategory = 'Term Life' | 'Health' | 'Endowment / Guaranteed' | 'ULIP' | 'Vehicle / Other';
+
+export interface InsurancePolicy {
+  id?: number;
+  category: InsuranceCategory;
+  insurer: string;
+  planName: string;
+  sumAssured: number;
+  annualPremium: number;
+  renewalDate: string;
+  paymentTerm: string;
+  notes: string;
+}
+
+export type AdvisorTopic = 'holdings' | 'mutual_funds' | 'insurance' | 'tax_loan' | 'general';
 
 export interface ReconciledMutualFund {
   name: string;
@@ -317,6 +371,8 @@ export interface CostBasisOverride {
   isin?: string;
   broker?: string;
   averagePrice: number;
+  csvQty?: number;
+  csvCurrentPrice?: number;
   source: 'manual' | 'csv_import';
   updatedAt: string;
 }
@@ -324,8 +380,10 @@ export interface CostBasisOverride {
 export interface CsvImportResult {
   canceled: boolean;
   fileName?: string;
+  detectedBroker?: string;
   parsedCount?: number;
   matchedInSnapshot?: number;
+  unmatchedNames?: string[];
   error?: string;
 }
 
@@ -403,6 +461,7 @@ export interface PortfolioSnapshot {
   estimatedMonthlySipTotal: number;
   allocations: AssetAllocationItem[];
   equities: ReconciledEquity[];
+  bonds?: ReconciledBond[];
   mutualFunds: ReconciledMutualFund[];
   activeSips: ActiveSipRecord[];
   reconciliation: ReconciliationSummary;
@@ -453,6 +512,7 @@ export interface AppStatePayload {
   sipBaselines: SipBaselineItem[];
   aliases: SymbolAlias[];
   costOverrides: CostBasisOverride[];
+  insurancePolicies: InsurancePolicy[];
   reports: AIReportRecord[];
   chatMessages: AIChatMessage[];
 }

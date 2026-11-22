@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBrokerHoldingsCsv } from '@main/engine/csvCostParser';
+import { inferBrokerFromFilename, parseBrokerHoldingsCsv } from '@main/engine/csvCostParser';
 
 describe('parseBrokerHoldingsCsv (Multi-Broker CSV Parser)', () => {
   it('parses Zerodha Console holdings CSV with preamble summary lines', () => {
@@ -47,5 +47,33 @@ TCS,12,29259.60
 
   it('throws a helpful error when required columns are missing', () => {
     expect(() => parseBrokerHoldingsCsv('ColA,ColB\nfoo,bar')).toThrow(/Could not detect holdings columns/i);
+  });
+
+  it('parses Paytm Money Web CSV with Qty, Current Price (LTP), SGBs, and broker inference', () => {
+    const detected = inferBrokerFromFilename('paytm-holdings.csv');
+    expect(detected).toBe('Paytm Money');
+
+    const csv = `Name,Qty.,Avg. Price (INR),Current Price (INR),Current Value (INR),Returns (INR),Returns (%)
+Cholamandalam Investment,60,1240.50,1870.00,112200.00,37770.00,50.74
+Swiggy Limited,20,390.00,178.20,3564.00,-4236.00,-54.31
+2.5% SGB 27-Jun-2031,10,5926.00,7920.00,79200.00,19940.00,33.65
+Oil India,100,340.00,432.00,43200.00,9200.00,27.06
+Indian Oil Corp,100,130.00,150.50,15050.00,2050.00,15.77
+`;
+    const rows = parseBrokerHoldingsCsv(csv, detected);
+    expect(rows).toHaveLength(5);
+    expect(rows[0].broker).toBe('Paytm Money');
+    expect(rows[0].csvQty).toBe(60);
+    expect(rows[0].csvCurrentPrice).toBe(1870);
+    expect(rows[0].holdingKey).toContain('@paytmmoney');
+    expect(rows[1].displayName).toBe('Swiggy Limited');
+    expect(rows[1].csvQty).toBe(20);
+    expect(rows[1].csvCurrentPrice).toBe(178.2);
+    expect(rows[2].displayName).toBe('2.5% SGB 27-Jun-2031');
+    expect(rows[2].averagePrice).toBe(5926);
+    // Oil India and Indian Oil Corp must NEVER collide!
+    expect(rows[3].holdingKey).not.toBe(rows[4].holdingKey);
+    expect(rows[3].displayName).toBe('Oil India');
+    expect(rows[4].displayName).toBe('Indian Oil Corp');
   });
 });

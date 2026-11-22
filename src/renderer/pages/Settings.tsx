@@ -16,7 +16,7 @@ import {
   Unlink
 } from 'lucide-react';
 import { AIProviderId, AIScheduleMode, AppStatePayload, BrokerId, UserProfile } from '@shared/types';
-import { AI_PROVIDER_PRESETS } from '@shared/constants';
+import { AI_KEY_GUIDELINES, AI_PROVIDER_PRESETS } from '@shared/constants';
 import { formatTimestamp } from '../lib/format';
 
 interface SettingsProps {
@@ -65,7 +65,14 @@ export const Settings: React.FC<SettingsProps> = ({
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelsSource, setModelsSource] = useState<'live' | 'fallback'>('fallback');
   const [customModelMode, setCustomModelMode] = useState(false);
+  const [showKeyGuide, setShowKeyGuide] = useState(
+    () => AI_PROVIDER_PRESETS[profile.aiProvider].requiresKey && !state.hasAiApiKey[profile.aiProvider]
+  );
   const [aiError, setAiError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setShowKeyGuide(AI_PROVIDER_PRESETS[provider].requiresKey && !state.hasAiApiKey[provider]);
+  }, [provider, state.hasAiApiKey[provider]]);
 
   useEffect(() => {
     setProvider(profile.aiProvider);
@@ -472,6 +479,51 @@ export const Settings: React.FC<SettingsProps> = ({
                 {aiError}
               </div>
             )}
+
+            {/* Step-by-Step API Key Setup Guide */}
+            <div className="mt-4 rounded-xl border border-slate-200 bg-white/80 dark:border-slate-800 dark:bg-slate-900/60">
+              <button
+                type="button"
+                onClick={() => setShowKeyGuide((v) => !v)}
+                className="flex w-full items-center justify-between px-3.5 py-2.5 text-left text-xs font-medium text-slate-700 dark:text-slate-200"
+              >
+                <span>{AI_KEY_GUIDELINES[provider].title}</span>
+                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400">
+                  {showKeyGuide ? (
+                    <>
+                      Hide steps <ChevronUp className="h-3.5 w-3.5" />
+                    </>
+                  ) : (
+                    <>
+                      Show steps <ChevronDown className="h-3.5 w-3.5" />
+                    </>
+                  )}
+                </span>
+              </button>
+              {showKeyGuide && (
+                <div className="border-t border-slate-200 px-3.5 py-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">
+                  <ol className="list-decimal space-y-1.5 pl-4">
+                    {AI_KEY_GUIDELINES[provider].steps.map((step, idx) => (
+                      <li key={idx} className="leading-relaxed">
+                        {step}
+                      </li>
+                    ))}
+                  </ol>
+                  <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-500/10 px-3 py-2 text-[11px] text-emerald-800 dark:text-emerald-300">
+                    <span>{AI_KEY_GUIDELINES[provider].tip}</span>
+                    {preset.keyUrl && (
+                      <button
+                        type="button"
+                        onClick={() => void window.portfolioPulse.openExternal(preset.keyUrl)}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-500"
+                      >
+                        Open {preset.label} Console <ExternalLink className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

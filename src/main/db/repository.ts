@@ -5,6 +5,7 @@ import {
   BrokerConnectionStatus,
   BrokerId,
   CostBasisOverride,
+  InsurancePolicy,
   PortfolioSnapshot,
   SipBaselineItem,
   SnapshotHistoryPoint,
@@ -335,10 +336,12 @@ export class PortfolioRepository {
       isin: string | null;
       broker: string | null;
       average_price: number;
+      csv_qty: number | null;
+      csv_current_price: number | null;
       source: 'manual' | 'csv_import';
       updated_at: string;
     }>(
-      `SELECT holding_key, display_name, symbol, isin, broker, average_price, source, updated_at
+      `SELECT holding_key, display_name, symbol, isin, broker, average_price, csv_qty, csv_current_price, source, updated_at
        FROM cost_basis_overrides
        ORDER BY display_name ASC`
     );
@@ -349,6 +352,9 @@ export class PortfolioRepository {
       isin: r.isin || undefined,
       broker: r.broker || undefined,
       averagePrice: r.average_price,
+      csvQty: r.csv_qty !== null && r.csv_qty !== undefined ? Number(r.csv_qty) : undefined,
+      csvCurrentPrice:
+        r.csv_current_price !== null && r.csv_current_price !== undefined ? Number(r.csv_current_price) : undefined,
       source: r.source === 'csv_import' ? 'csv_import' : 'manual',
       updatedAt: r.updated_at
     }));
@@ -357,8 +363,8 @@ export class PortfolioRepository {
   saveCostOverride(item: CostBasisOverride): void {
     this.db.run(
       `INSERT OR REPLACE INTO cost_basis_overrides
-       (holding_key, display_name, symbol, isin, broker, average_price, source, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (holding_key, display_name, symbol, isin, broker, average_price, csv_qty, csv_current_price, source, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         item.holdingKey.trim().toLowerCase(),
         item.displayName.trim(),
@@ -366,6 +372,8 @@ export class PortfolioRepository {
         item.isin?.trim().toUpperCase() || null,
         item.broker?.trim() || null,
         item.averagePrice,
+        item.csvQty ?? null,
+        item.csvCurrentPrice ?? null,
         item.source,
         item.updatedAt
       ]
@@ -376,10 +384,18 @@ export class PortfolioRepository {
     if (items.length === 0) return;
     this.db.execBatch((rawDb) => {
       for (const item of items) {
+        // Cleanly upgrade legacy v0.1.0 broker-less CSV rows so re-importing a broker CSV never creates duplicates
+        if (item.source === 'csv_import' && item.broker?.trim()) {
+          rawDb.run(
+            `DELETE FROM cost_basis_overrides
+             WHERE source = 'csv_import' AND broker IS NULL AND LOWER(display_name) = ?`,
+            [item.displayName.trim().toLowerCase()]
+          );
+        }
         rawDb.run(
           `INSERT OR REPLACE INTO cost_basis_overrides
-           (holding_key, display_name, symbol, isin, broker, average_price, source, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (holding_key, display_name, symbol, isin, broker, average_price, csv_qty, csv_current_price, source, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             item.holdingKey.trim().toLowerCase(),
             item.displayName.trim(),
@@ -387,6 +403,8 @@ export class PortfolioRepository {
             item.isin?.trim().toUpperCase() || null,
             item.broker?.trim() || null,
             item.averagePrice,
+            item.csvQty ?? null,
+            item.csvCurrentPrice ?? null,
             item.source,
             item.updatedAt
           ]
@@ -397,6 +415,83 @@ export class PortfolioRepository {
 
   deleteCostOverride(holdingKey: string): void {
     this.db.run('DELETE FROM cost_basis_overrides WHERE holding_key = ?', [holdingKey.trim().toLowerCase()]);
+  }
+
+  // --- Insurance Policies ---
+  getInsurancePolicies(isDemo: boolean): InsurancePolicy[] {
+    const rows = this.db.all<{
+      id: number;
+      category: InsurancePolicy['category'];
+      insurer: string;
+      plan_name: string;
+      sum_assured: number;
+      annual_premium: number;
+      renewal_date: string;
+      payment_term: string;
+      notes: string;
+    }>(
+      `SELECT id, category, insurer, plan_name, sum_assured, annual_premium, renewal_date, payment_term, notes
+       FROM insurance_policies
+       WHERE is_demo = ?
+       ORDER BY id ASC`,
+      [isDemo ? 1 : 0]
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      category: r.category,
+      insurer: r.insurer,
+      planName: r.plan_name,
+      sumAssured: Number(r.sum_assured ?? 0),
+      annualPremium: Number(r.annual_premium ?? 0),
+      renewalDate: r.renewal_date || '',
+      paymentTerm: r.payment_term || '',
+      notes: r.notes || ''
+    }));
+  }
+
+  saveInsurancePolicy(isDemo: boolean, policy: InsurancePolicy): InsurancePolicy {
+    const demoFlag = isDemo ? 1 : 0;
+    if (policy.id) {
+      this.db.run(
+        `UPDATE insurance_policies
+         SET category = ?, insurer = ?, plan_name = ?, sum_assured = ?, annual_premium = ?, renewal_date = ?, payment_term = ?, notes = ?
+         WHERE id = ? AND is_demo = ?`,
+        [
+          policy.category,
+          policy.insurer.trim(),
+          policy.planName.trim(),
+          Number(policy.sumAssured) || 0,
+          Number(policy.annualPremium) || 0,
+          policy.renewalDate.trim(),
+          policy.paymentTerm.trim(),
+          policy.notes.trim(),
+          policy.id,
+          demoFlag
+        ]
+      );
+      return policy;
+    }
+
+    this.db.run(
+      `INSERT INTO insurance_policies (is_demo, category, insurer, plan_name, sum_assured, annual_premium, renewal_date, payment_term, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        demoFlag,
+        policy.category,
+        policy.insurer.trim(),
+        policy.planName.trim(),
+        Number(policy.sumAssured) || 0,
+        Number(policy.annualPremium) || 0,
+        policy.renewalDate.trim(),
+        policy.paymentTerm.trim(),
+        policy.notes.trim()
+      ]
+    );
+    return { ...policy, id: this.db.getLastInsertId() };
+  }
+
+  deleteInsurancePolicy(id: number): void {
+    this.db.run('DELETE FROM insurance_policies WHERE id = ?', [id]);
   }
 
   // --- AI Reports & Chat ---
@@ -481,6 +576,7 @@ export class PortfolioRepository {
       rawDb.run('DELETE FROM sip_baselines');
       rawDb.run('DELETE FROM symbol_aliases');
       rawDb.run('DELETE FROM cost_basis_overrides');
+      rawDb.run('DELETE FROM insurance_policies');
       rawDb.run('DELETE FROM ai_reports');
       rawDb.run('DELETE FROM ai_chat_messages');
     });

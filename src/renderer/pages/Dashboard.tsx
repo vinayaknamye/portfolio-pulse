@@ -33,7 +33,10 @@ import {
 
 interface DashboardProps {
   state: AppStatePayload;
-  onNavigate: (tab: 'holdings' | 'audit' | 'insights' | 'strategy' | 'settings') => void;
+  onNavigate: (
+    tab: 'holdings' | 'audit' | 'insights' | 'strategy' | 'settings',
+    opts?: { insightsSubTab?: 'alerts' | 'reviews' | 'advisor' }
+  ) => void;
   onDismissAlert: (id: string) => Promise<void>;
 }
 
@@ -52,6 +55,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
       ? Math.min(100, Math.round((snap.emergencyCushionTotal / state.profile.emergencyTarget) * 100))
       : 100;
 
+  const upstoxLinked = snap.upstoxState !== 'not_linked';
+  const directEquities = snap.equities.filter((e) => !e.isNonEquity);
+  const costCoveredCount = directEquities.filter((e) => e.costBasisSource !== 'market_value_proxy').length;
+  const bonds = snap.bonds ?? snap.equities.filter((e) => e.isNonEquity);
+  const bondsTotal = bonds.reduce((sum, b) => sum + b.currentValue, 0);
+
+  const connectedSources: string[] = [];
+  if (state.isDemoMode) {
+    connectedSources.push('Demo Portfolio');
+  } else {
+    if (state.brokers.indmoney.state !== 'disconnected') connectedSources.push('INDmoney');
+    if (state.brokers.upstox.state !== 'disconnected') connectedSources.push('Upstox');
+  }
+  const sourcesLabel = connectedSources.length > 0 ? connectedSources.join(' + ') : 'Linked Broker';
+
+  const customName = state.profile.displayName?.trim();
+  const hasPersonalName = Boolean(customName && customName.toLowerCase() !== 'investor');
+
   const chartData = history.map((h) => ({
     date: h.snapshotDate.slice(5),
     networth: Math.round(h.totalNetworth),
@@ -69,6 +90,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
 
   return (
     <div className="space-y-6">
+      {/* Personalized Greeting Banner */}
+      {hasPersonalName && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h1 className="text-lg font-bold tracking-tight text-slate-900 dark:text-white">
+              {customName}&apos;s Portfolio
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {sourcesLabel} · Snapshot {snap.snapshotDate}
+            </p>
+          </div>
+          <button
+            onClick={() => onNavigate('insights', { insightsSubTab: 'advisor' })}
+            className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
+          >
+            Validate Advisor Pitch with AI →
+          </button>
+        </div>
+      )}
+
       {/* KPI Row */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800/90 dark:bg-surface-900">
@@ -143,10 +184,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
             <Repeat className="h-4 w-4 text-purple-500" />
           </div>
           <div className="mt-2 text-2xl font-bold tabular-nums text-slate-900 dark:text-white">
-            {formatInrCompact(snap.estimatedMonthlySipTotal)}
+            {snap.activeSips.length > 0 ? formatInrCompact(snap.estimatedMonthlySipTotal) : 'Lump-sum'}
           </div>
           <div className="mt-1.5 text-xs tabular-nums text-slate-500 dark:text-slate-400">
-            {snap.activeSips.length} active · SA cash {formatInrCompact(snap.savingsAccountBalance)}
+            {snap.activeSips.length > 0
+              ? `${snap.activeSips.length} active · SA cash ${formatInrCompact(snap.savingsAccountBalance)}`
+              : `0 active SIPs · SA cash ${formatInrCompact(snap.savingsAccountBalance)}`}
           </div>
         </div>
       </div>
@@ -286,10 +329,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
               Daily Audit Feed ({activeAlerts.length})
             </h2>
             <button
-              onClick={() => onNavigate('audit')}
+              onClick={() => onNavigate('insights', { insightsSubTab: 'alerts' })}
               className="text-xs font-medium text-emerald-600 hover:underline dark:text-emerald-400"
             >
-              View all SIPs & Audit →
+              View all Alerts →
             </button>
           </div>
           {activeAlerts.length === 0 ? (
@@ -335,48 +378,87 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
           )}
         </div>
 
-        {/* Reconciliation & Liquidity Card */}
+        {/* Portfolio & Cost Basis Health Card */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-800/90 dark:bg-surface-900">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Multi-Broker Health</h2>
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Portfolio &amp; Cost Health</h2>
           <div className="mt-4 space-y-3 text-xs">
             <div className="flex items-center justify-between">
-              <span className="text-slate-500 dark:text-slate-400">Upstox Cost Basis</span>
+              <span className="text-slate-500 dark:text-slate-400">Connected Sources</span>
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 font-medium text-emerald-600 dark:text-emerald-400">
+                {sourcesLabel}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between tabular-nums">
+              <span className="text-slate-500 dark:text-slate-400">Avg Cost Coverage</span>
               <span
-                className={`rounded-full px-2 py-0.5 font-medium ${
-                  snap.upstoxState === 'live'
-                    ? 'bg-emerald-500/15 text-emerald-500'
-                    : snap.upstoxState === 'stale_reauth_required'
-                    ? 'bg-amber-500/15 text-amber-500'
-                    : 'bg-slate-500/15 text-slate-400'
+                className={`font-medium ${
+                  directEquities.length === 0 || costCoveredCount === directEquities.length
+                    ? 'text-emerald-500'
+                    : 'text-amber-500'
                 }`}
               >
-                {snap.upstoxState === 'live'
-                  ? 'Live Synced'
-                  : snap.upstoxState === 'stale_reauth_required'
-                  ? 'Carried Forward'
-                  : 'INDmoney Only'}
+                {costCoveredCount} / {directEquities.length} equities
               </span>
             </div>
+
+            {upstoxLinked ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400">Upstox Sync</span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 font-medium ${
+                      snap.upstoxState === 'live'
+                        ? 'bg-emerald-500/15 text-emerald-500'
+                        : 'bg-amber-500/15 text-amber-500'
+                    }`}
+                  >
+                    {snap.upstoxState === 'live' ? 'Live Synced' : 'Carried Forward'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between tabular-nums">
+                  <span className="text-slate-500 dark:text-slate-400">Aggregate Variance</span>
+                  <span className="font-medium text-slate-900 dark:text-white">
+                    {formatInrFull(snap.reconciliation.aggregateDiff, 2)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between tabular-nums">
+                  <span className="text-slate-500 dark:text-slate-400">Upstox Idle Margin</span>
+                  <span className="font-medium text-slate-900 dark:text-white">
+                    {formatInrFull(snap.upstoxAvailableMargin, 2)}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between tabular-nums">
+                  <span className="text-slate-500 dark:text-slate-400">Bonds &amp; SGBs</span>
+                  <span className="font-medium text-slate-900 dark:text-white">
+                    {bonds.length > 0 ? `${formatInrCompact(bondsTotal)} (${bonds.length})` : 'None synced'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between tabular-nums">
+                  <span className="text-slate-500 dark:text-slate-400">Savings Account Cash</span>
+                  <span className="font-medium text-slate-900 dark:text-white">
+                    {formatInrCompact(snap.savingsAccountBalance)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between tabular-nums">
+                  <span className="text-slate-500 dark:text-slate-400">Insurance Policies</span>
+                  <button
+                    onClick={() => onNavigate('strategy')}
+                    className="font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+                  >
+                    {state.insurancePolicies.length > 0
+                      ? `${state.insurancePolicies.length} tracked`
+                      : 'Add policies →'}
+                  </button>
+                </div>
+              </>
+            )}
+
             <div className="flex items-center justify-between tabular-nums">
-              <span className="text-slate-500 dark:text-slate-400">Matched Equities</span>
-              <span className="font-medium text-slate-900 dark:text-white">
-                {snap.reconciliation.matchedCount} matched · {snap.reconciliation.externalCount} external
-              </span>
-            </div>
-            <div className="flex items-center justify-between tabular-nums">
-              <span className="text-slate-500 dark:text-slate-400">Aggregate Variance</span>
-              <span className="font-medium text-slate-900 dark:text-white">
-                {formatInrFull(snap.reconciliation.aggregateDiff, 2)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between tabular-nums">
-              <span className="text-slate-500 dark:text-slate-400">Upstox Idle Margin</span>
-              <span className="font-medium text-slate-900 dark:text-white">
-                {formatInrFull(snap.upstoxAvailableMargin, 2)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between tabular-nums">
-              <span className="text-slate-500 dark:text-slate-400">Liquid STP Corpus</span>
+              <span className="text-slate-500 dark:text-slate-400">Liquid Corpus</span>
               <span className="font-medium text-slate-900 dark:text-white">
                 {formatInrCompact(snap.liquidCorpusTotal)}
               </span>
@@ -390,7 +472,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ state, onNavigate, onDismi
               Holdings
             </button>
             <button
-              onClick={() => onNavigate('insights')}
+              onClick={() => onNavigate('insights', { insightsSubTab: 'reviews' })}
               className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500"
             >
               AI Review

@@ -1,10 +1,26 @@
-import { AuditAlert, PortfolioSnapshot, SipBaselineItem, UserProfile } from '@shared/types';
+import { AuditAlert, PortfolioSnapshot, ReconciledEquity, SipBaselineItem, UserProfile } from '@shared/types';
 
 export interface AuditInput {
   current: PortfolioSnapshot;
   previous: PortfolioSnapshot | null;
   profile: UserProfile;
   sipBaselines: SipBaselineItem[];
+}
+
+function isInternalOrIsinCode(code: string): boolean {
+  const c = (code || '').trim();
+  if (!c) return true;
+  if (/^INDS\d+$/i.test(c)) return true;
+  if (/^DEMO_[A-Z0-9]+$/i.test(c)) return true;
+  if (/^[A-Z]{2}[A-Z0-9]{10}$/i.test(c)) return true;
+  return false;
+}
+
+export function formatEquityDisplayName(e: Pick<ReconciledEquity, 'name' | 'symbol'>): string {
+  const cleanName = (e.name || '').trim();
+  if (cleanName) return cleanName;
+  if (e.symbol && !isInternalOrIsinCode(e.symbol)) return e.symbol;
+  return e.symbol || 'Unknown Holding';
 }
 
 function formatInrCompact(val: number): string {
@@ -77,7 +93,7 @@ export function runPortfolioAudit(input: AuditInput): AuditAlert[] {
   if (rec.discrepancies.length > 0) {
     const summary = rec.discrepancies
       .slice(0, 3)
-      .map((d) => `${d.symbol} (ΔQty ${d.qtyDiff.toFixed(2)}, ΔVal ${formatInrCompact(d.valueDiff)})`)
+      .map((d) => `${formatEquityDisplayName({ name: d.name, symbol: d.symbol })} (ΔQty ${d.qtyDiff.toFixed(2)}, ΔVal ${formatInrCompact(d.valueDiff)})`)
       .join('; ');
     push(
       'reconciliation',
@@ -164,7 +180,7 @@ export function runPortfolioAudit(input: AuditInput): AuditAlert[] {
   if (deepRed.length > 0) {
     const names = deepRed
       .slice(0, 5)
-      .map((e) => `${e.symbol} (${e.pnlPct.toFixed(1)}%)`)
+      .map((e) => `${formatEquityDisplayName(e)} (${e.pnlPct.toFixed(1)}%)`)
       .join(', ');
     push(
       'drawdown',
@@ -185,7 +201,7 @@ export function runPortfolioAudit(input: AuditInput): AuditAlert[] {
     );
     if (concentrated.length > 0) {
       const list = concentrated
-        .map((e) => `${e.symbol} (${((e.currentValue / totalEquityVal) * 100).toFixed(1)}%)`)
+        .map((e) => `${formatEquityDisplayName(e)} (${((e.currentValue / totalEquityVal) * 100).toFixed(1)}%)`)
         .join(', ');
       push(
         'concentration',

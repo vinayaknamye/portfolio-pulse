@@ -280,6 +280,21 @@ export function buildDemoPayloads(dayOffsetFromToday = 0): {
     },
     stocks: indStocks,
     mutualFunds: mfHoldings,
+    bonds: [
+      {
+        investment: '2.5% SGB 27-Jun-2031',
+        investment_code: 'SGBJUN31I',
+        isin: 'IN0020230069',
+        broker: 'Paytm Money',
+        total_units: 12,
+        unit_price: price(7920),
+        invested_amount: 71112,
+        market_value: Math.round(12 * price(7920) * 100) / 100,
+        total_pnl: Math.round((12 * price(7920) - 71112) * 100) / 100,
+        pnl_per: Math.round(((12 * price(7920) - 71112) / 71112) * 10000) / 100,
+        assetclass_l2: 'gold'
+      }
+    ],
     mfSips: [
       {
         name: 'Parag Parikh Flexi Cap Fund Direct Growth',
@@ -408,6 +423,29 @@ export function ensureDemoSeeded(repo: PortfolioRepository, profile: UserProfile
     sipBaselines: demoBaselines
   });
   repo.replaceAlertsForSnapshot(true, latestId, alerts);
+
+  if (repo.getInsurancePolicies(true).length === 0) {
+    repo.saveInsurancePolicy(true, {
+      category: 'Term Life',
+      insurer: 'HDFC Life',
+      planName: 'Click 2 Protect Super (Pure Term)',
+      sumAssured: 20000000,
+      annualPremium: 24500,
+      renewalDate: '15-Mar',
+      paymentTerm: 'Regular Pay till Age 60',
+      notes: 'Pure term cover — no maturity/investment component.'
+    });
+    repo.saveInsurancePolicy(true, {
+      category: 'Health',
+      insurer: 'HDFC Ergo',
+      planName: 'Optima Secure Family Floater',
+      sumAssured: 1500000,
+      annualPremium: 32000,
+      renewalDate: '10-Aug',
+      paymentTerm: 'Annual',
+      notes: 'Personal base cover independent of employer group policy.'
+    });
+  }
 
   return latestSnap;
 }
