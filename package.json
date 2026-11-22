@@ -1,6 +1,6 @@
 {
   "name": "portfolio-pulse",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first Indian portfolio tracker, multi-broker MCP reconciler (INDmoney + Upstox), daily audit notifier, and BYOK AI advisor.",
   "author": "Portfolio Pulse Contributors",
   "license": "MIT",

@@ -154,4 +154,69 @@ describe('runPortfolioAudit', () => {
     const notif = buildNotificationSummary(curr, alerts, null);
     expect(notif.title).toContain('Upstox Re-link Needed');
   });
+
+  it('displays human-readable scrip names instead of internal INDmoney IDs or raw ISINs in audit alerts', () => {
+    const curr = makeSnapshot({
+      equities: [
+        {
+          id: 'ext:paytm:INDS20852',
+          symbol: 'INDS20852',
+          name: 'Swiggy Limited',
+          isin: 'INE00H001014',
+          broker: 'Paytm Money',
+          isExternalBroker: true,
+          isNonEquity: false,
+          quantity: 20,
+          averagePrice: 390,
+          lastPrice: 178.2,
+          investedValue: 7800,
+          currentValue: 3564,
+          pnl: -4236,
+          pnlPct: -54.3,
+          dayChangePct: -1.1,
+          marketCap: 'large',
+          costBasisSource: 'csv_import',
+          matchStatus: 'external'
+        },
+        {
+          id: 'ext:paytm:INE040A01034',
+          symbol: 'INE040A01034',
+          name: 'HDFC Bank Limited',
+          isin: 'INE040A01034',
+          broker: 'Paytm Money',
+          isExternalBroker: true,
+          isNonEquity: false,
+          quantity: 100,
+          averagePrice: 1500,
+          lastPrice: 1750,
+          investedValue: 150000,
+          currentValue: 175000,
+          pnl: 25000,
+          pnlPct: 16.67,
+          dayChangePct: 0.5,
+          marketCap: 'large',
+          costBasisSource: 'csv_import',
+          matchStatus: 'external'
+        }
+      ]
+    });
+
+    const alerts = runPortfolioAudit({
+      current: curr,
+      previous: null,
+      profile: {
+        ...DEFAULT_USER_PROFILE,
+        drawdownThresholdPct: -15,
+        concentrationThresholdPct: 50
+      },
+      sipBaselines: []
+    });
+
+    const drawdown = alerts.find((a) => a.category === 'drawdown');
+    const conc = alerts.find((a) => a.category === 'concentration');
+    expect(drawdown?.detail).toContain('Swiggy Limited');
+    expect(drawdown?.detail).not.toContain('INDS20852');
+    expect(conc?.detail).toContain('HDFC Bank Limited');
+    expect(conc?.detail).not.toContain('INE040A01034');
+  });
 });

@@ -1,5 +1,6 @@
 import {
   IndmoneyFetchPayload,
+  RawIndmoneyBond,
   RawIndmoneyMF,
   RawIndmoneyNetworth,
   RawIndmoneySipItem,
@@ -55,10 +56,11 @@ export class IndmoneyAdapter implements BrokerAdapter<IndmoneyFetchPayload> {
         return extractMcpToolJson<T>(res);
       };
 
-      const [networthRes, stocksRes, mfRes, mfSipsRes, stockSipsRes] = await Promise.all([
+      const [networthRes, stocksRes, mfRes, bondsRes, mfSipsRes, stockSipsRes] = await Promise.all([
         callIfPresent<RawIndmoneyNetworth>('networth_snapshot'),
         callIfPresent<{ holdings?: RawIndmoneyStock[] }>('networth_holdings', { asset_type: 'IND_STOCK' }),
         callIfPresent<{ holdings?: RawIndmoneyMF[] }>('networth_holdings', { asset_type: 'MF' }),
+        callIfPresent<{ holdings?: RawIndmoneyBond[] }>('networth_holdings', { asset_type: 'BOND' }).catch(() => null),
         callIfPresent<{ mf_sips?: RawIndmoneySipItem[] }>('mf_sips'),
         callIfPresent<{ indian_stocks_sips?: RawIndmoneyStockSipItem[] }>('indian_stocks_sips')
       ]);
@@ -71,6 +73,7 @@ export class IndmoneyAdapter implements BrokerAdapter<IndmoneyFetchPayload> {
         networth: networthRes,
         stocks: stocksRes?.holdings || [],
         mutualFunds: mfRes?.holdings || [],
+        bonds: bondsRes?.holdings || [],
         mfSips: mfSipsRes?.mf_sips || [],
         stockSips: stockSipsRes?.indian_stocks_sips || []
       };

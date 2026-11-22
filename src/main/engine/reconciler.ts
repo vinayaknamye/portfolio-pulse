@@ -4,8 +4,10 @@ import {
   CostBasisOverride,
   IndmoneyFetchPayload,
   PortfolioSnapshot,
+  RawIndmoneyBond,
   RawIndmoneyStock,
   RawUpstoxHolding,
+  ReconciledBond,
   ReconciledEquity,
   ReconciledMutualFund,
   ReconciliationSummary,
@@ -44,8 +46,6 @@ const STOP_WORDS = new Set([
   'company',
   'co',
   'industries',
-  'india',
-  'indian',
   'of',
   'and',
   'the',
@@ -60,12 +60,15 @@ const ABBREV_MAP: Record<string, string> = {
   serv: 'services',
   ind: 'industries',
   fin: 'finance',
+  finl: 'financial',
   in: 'investment',
+  inv: 'investment',
   co: 'company',
   nip: 'nippon',
   vn: 'ventures',
   dev: 'developers',
   pharma: 'pharmaceutical',
+  pharm: 'pharmaceutical',
   intl: 'international',
   eng: 'engineering',
   infra: 'infrastructure',
@@ -75,12 +78,34 @@ const ABBREV_MAP: Record<string, string> = {
   elec: 'electronics',
   aero: 'aeronautics',
   ent: 'enterprises',
-  cap: 'capital'
+  entp: 'enterprises',
+  cap: 'capital',
+  pow: 'power',
+  isp: 'ispat',
+  chem: 'chemicals',
+  hosp: 'hospitals',
+  cons: 'consumer',
+  prod: 'products',
+  sol: 'solutions',
+  sys: 'systems',
+  comm: 'communications',
+  auto: 'automotive',
+  sec: 'securities',
+  hsg: 'housing',
+  fert: 'fertilizers',
+  ref: 'refineries',
+  lab: 'laboratories',
+  labs: 'laboratories',
+  mgt: 'management',
+  mgmt: 'management',
+  hldg: 'holdings',
+  hldgs: 'holdings'
 };
 
 export function normalizeCompanyName(raw: string): string {
   return raw
     .toLowerCase()
+    .replace(/['’]/g, '')
     .replace(/&/g, ' ')
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
@@ -132,6 +157,120 @@ function normalizeSymbolCompact(symbol: string): string {
 }
 
 /**
+ * Extracts alternate names from brand-prefixed or parenthetical broker labels, e.g.:
+ * - "LT - Larsen & Toubro" -> ["LT - Larsen & Toubro", "LT", "Larsen & Toubro"]
+ * - "Groww - Billionbrains Garage Ventures" -> [..., "Groww", "Billionbrains Garage Ventures"]
+ * - "FSN E-Commerce Ventures (Nykaa)" -> [..., "FSN E-Commerce Ventures", "Nykaa"]
+ */
+export function extractNameVariants(raw: string): string[] {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return [];
+  const variants = new Set<string>([trimmed]);
+
+  const splitDash = trimmed.split(/\s+[-–—|]\s+/);
+  if (splitDash.length >= 2) {
+    for (const part of splitDash) {
+      const clean = part.trim();
+      if (clean.length >= 2) variants.add(clean);
+    }
+  }
+
+  const parenMatch = trimmed.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  if (parenMatch) {
+    if (parenMatch[1].trim().length >= 2) variants.add(parenMatch[1].trim());
+    if (parenMatch[2].trim().length >= 2) variants.add(parenMatch[2].trim());
+  }
+
+  return Array.from(variants);
+}
+
+function canonicalBrokerName(broker?: string | null): string {
+  const compact = (broker || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!compact || compact === 'unknown' || compact === 'multiple' || compact === 'other' || compact === 'external') {
+    return '';
+  }
+  if (compact.includes('paytm')) return 'paytm';
+  if (compact.includes('zerodha') || compact.includes('kite')) return 'zerodha';
+  if (compact.includes('upstox') || compact.includes('rksv')) return 'upstox';
+  if (compact.includes('groww')) return 'groww';
+  if (compact.includes('angel')) return 'angelone';
+  if (compact.includes('icici')) return 'icicidirect';
+  if (compact.includes('hdfc')) return 'hdfcsec';
+  if (compact.includes('kotak')) return 'kotaksec';
+  if (compact.includes('pinnacle')) return 'pinnacle';
+  if (compact.includes('dhan')) return 'dhan';
+  if (compact.includes('indmoney')) return 'indmoney';
+  return compact;
+}
+
+function brokersMatch(a?: string | null, b?: string | null): boolean {
+  const ca = canonicalBrokerName(a);
+  const cb = canonicalBrokerName(b);
+  return ca.length > 0 && ca === cb;
+}
+
+function brokersConflict(overrideBroker?: string | null, holdingBroker?: string | null): boolean {
+  const ca = canonicalBrokerName(overrideBroker);
+  const cb = canonicalBrokerName(holdingBroker);
+  // If either side is unspecified, or holding is labeled generic INDmoney (which may aggregate external brokers), do not block.
+  if (!ca || !cb || cb === 'indmoney') return false;
+  return ca !== cb;
+}
+
+export function classifyBondType(
+  name: string,
+  symbol?: string | null,
+  isin?: string | null
+): ReconciledBond['bondType'] {
+  const upperName = (name || '').toUpperCase();
+  const upperSym = (symbol || '').toUpperCase().trim();
+  const upperIsin = (isin || '').toUpperCase().trim();
+
+  if (/\bSGB\b|SOVEREIGN\s+GOLD/.test(upperName) || upperSym.startsWith('SGB')) {
+    return 'SGB';
+  }
+  if (
+    /\b(NCD|DEBENTURE)\b/.test(upperName) ||
+    /^\d{3,}[A-Z]+\d{2}$/.test(upperSym) ||
+    (upperIsin.length === 12 && upperIsin.startsWith('INE') && ['07', '08'].includes(upperIsin.slice(7, 9)))
+  ) {
+    return 'NCD';
+  }
+  if (
+    /\b(G-SEC|GSEC|GOI|T-BILL|TBILL|SDL)\b/.test(upperName) ||
+    /^GS\d{4}/.test(upperSym) ||
+    upperIsin.startsWith('IN00')
+  ) {
+    return 'G-Sec';
+  }
+  return 'Bond';
+}
+
+export function isIndmoneyBondOrSgb(item: {
+  investment: string;
+  investment_code?: string;
+  isin?: string | null;
+  assetclass_l2?: string | null;
+}): boolean {
+  const name = (item.investment || '').toUpperCase();
+  const code = (item.investment_code || '').toUpperCase().trim();
+  const isin = (item.isin || '').toUpperCase().trim();
+  const assetClass = (item.assetclass_l2 || '').toLowerCase().trim();
+
+  if (isin.startsWith('IN00')) return true;
+  if (isin.length === 12 && isin.startsWith('INE')) {
+    const secType = isin.slice(7, 9);
+    if (secType === '07' || secType === '08' || secType === '11') return true;
+  }
+  if (/\b(SGB|SOVEREIGN\s+GOLD\s+BOND|NCD|DEBENTURE|G-SEC|GSEC|T-BILL|TBILL)\b/.test(name)) return true;
+  if (code.startsWith('SGB') || /^\d{3,}[A-Z]+\d{2}$/.test(code)) return true;
+  if (!/\bETF\b/.test(name) && /\bBOND\b/.test(name)) return true;
+  if (!/\bETF\b/.test(name) && (assetClass === 'debt' || assetClass === 'bond' || assetClass === 'bonds')) return true;
+
+  return false;
+}
+
+/**
  * Detects non-equity demat instruments on Upstox (corporate NCDs, G-Secs, SGBs)
  * using Indian ISIN conventions (positions 7-8 = '07'/'08' for debt/NCD, 'IN00' for G-Sec/SGB)
  * and common symbol/company descriptors.
@@ -172,10 +311,10 @@ function hasNativeIndmoneyCostBasis(stock: RawIndmoneyStock): boolean {
   return false;
 }
 
-function tokenSimilarity(a: string, b: string): number {
+function computeTokenOverlap(a: string, b: string): { overlap: number; sizeA: number; sizeB: number } {
   const tokensA = new Set(normalizeCompanyName(a).split(' ').filter(Boolean));
   const tokensB = new Set(normalizeCompanyName(b).split(' ').filter(Boolean));
-  if (tokensA.size === 0 || tokensB.size === 0) return 0;
+  if (tokensA.size === 0 || tokensB.size === 0) return { overlap: 0, sizeA: tokensA.size, sizeB: tokensB.size };
 
   let overlap = 0;
   for (const t of tokensA) {
@@ -184,13 +323,42 @@ function tokenSimilarity(a: string, b: string): number {
       continue;
     }
     for (const tb of tokensB) {
-      if (t.length >= 4 && tb.length >= 4 && (t.startsWith(tb) || tb.startsWith(t))) {
-        overlap += 0.8;
+      if (t.length >= 3 && tb.length >= 3 && (t.startsWith(tb) || tb.startsWith(t))) {
+        overlap += 0.85;
         break;
       }
     }
   }
-  return overlap / Math.max(tokensA.size, tokensB.size);
+  return { overlap, sizeA: tokensA.size, sizeB: tokensB.size };
+}
+
+function tokenSimilarity(a: string, b: string): number {
+  const { overlap, sizeA, sizeB } = computeTokenOverlap(a, b);
+  if (sizeA === 0 || sizeB === 0) return 0;
+  return overlap / Math.max(sizeA, sizeB);
+}
+
+function subsetTokenSimilarity(a: string, b: string): { ratio: number; minSize: number; overlap: number } {
+  const { overlap, sizeA, sizeB } = computeTokenOverlap(a, b);
+  const minSize = Math.min(sizeA, sizeB);
+  if (minSize === 0) return { ratio: 0, minSize: 0, overlap: 0 };
+  return { ratio: overlap / minSize, minSize, overlap };
+}
+
+function hasAcronymMatch(nameA: string, nameB: string): boolean {
+  const variantsA = extractNameVariants(nameA);
+  const variantsB = extractNameVariants(nameB);
+  for (const va of variantsA) {
+    const compactA = normalizeSymbolCompact(va);
+    const acroA = buildCompanyAcronyms(va);
+    for (const vb of variantsB) {
+      const compactB = normalizeSymbolCompact(vb);
+      const acroB = buildCompanyAcronyms(vb);
+      if (compactA.length >= 2 && compactA.length <= 6 && acroB.has(compactA)) return true;
+      if (compactB.length >= 2 && compactB.length <= 6 && acroA.has(compactB)) return true;
+    }
+  }
+  return false;
 }
 
 function scoreStockMatch(ind: RawIndmoneyStock, u: NormalizedUpstox): number {
@@ -314,8 +482,37 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
   const indmoneyHasUpstoxRows = indStocks.some((s) => isUpstoxBrokerLabel(s.broker));
 
   const equities: ReconciledEquity[] = [];
+  const bonds: ReconciledBond[] = [];
+  const seenBondKeys = new Set<string>();
   const discrepancies: ReconciliationSummary['discrepancies'] = [];
   const unmatchedIndmoney: UnmatchedCandidate[] = [];
+
+  const registerBond = (bond: ReconciledBond) => {
+    const isinKey = bond.isin ? `isin:${bond.isin.toUpperCase()}` : '';
+    const nameKey = `name:${normalizeCompact(bond.name)}`;
+    if ((isinKey && seenBondKeys.has(isinKey)) || seenBondKeys.has(nameKey)) {
+      // If Upstox live data arrives for a bond already added from INDmoney without real cost basis, upgrade its cost basis
+      if (bond.costBasisSource === 'upstox_live') {
+        const existingIdx = bonds.findIndex(
+          (b) => (isinKey && b.isin.toUpperCase() === bond.isin.toUpperCase()) || normalizeCompact(b.name) === normalizeCompact(bond.name)
+        );
+        if (existingIdx !== -1 && bonds[existingIdx].costBasisSource === 'market_value_proxy') {
+          bonds[existingIdx] = {
+            ...bonds[existingIdx],
+            averagePrice: bond.averagePrice,
+            investedValue: bond.investedValue,
+            pnl: bond.pnl,
+            pnlPct: bond.pnlPct,
+            costBasisSource: 'upstox_live'
+          };
+        }
+      }
+      return;
+    }
+    if (isinKey) seenBondKeys.add(isinKey);
+    seenBondKeys.add(nameKey);
+    bonds.push(bond);
+  };
 
   let indmoneyStockTotal = 0;
   let externalStockTotal = 0;
@@ -325,7 +522,7 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
 
   const pendingUpstoxMatchStocks: RawIndmoneyStock[] = [];
 
-  // Pass 1: Separate external/native INDmoney stocks vs Upstox-broker rows (plus Tier 1 ISIN/Alias matching)
+  // Pass 1: Separate SGBs/Bonds + external/native INDmoney stocks vs Upstox-broker rows (plus Tier 1 ISIN/Alias matching)
   for (const s of indStocks) {
     const mktVal = Number(s.market_value ?? 0);
     const units = Number(s.total_units ?? 0);
@@ -334,6 +531,34 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
 
     const brokerLabel = (s.broker || (indmoneyHasUpstoxRows ? 'Unknown' : 'INDmoney')).trim();
     const belongsToUpstox = isUpstoxBrokerLabel(s.broker);
+
+    // Route SGBs, NCDs, G-Secs & Bonds that appear inside INDmoney's IND_STOCK holdings into the dedicated Bonds section
+    if (isIndmoneyBondOrSgb(s)) {
+      externalStockTotal += mktVal;
+      const nativeCost = hasNativeIndmoneyCostBasis(s);
+      const investedVal = nativeCost ? Number(s.invested_amount) : mktVal;
+      const pnl = nativeCost ? Number(s.total_pnl ?? mktVal - investedVal) : 0;
+      const pnlPct = nativeCost && investedVal > 0 ? (pnl / investedVal) * 100 : 0;
+      trueIndmoneyReconciledStockInvested += investedVal;
+
+      registerBond({
+        id: `bond:indstock:${brokerLabel.toLowerCase()}:${s.investment_code || s.investment}`,
+        name: s.investment,
+        symbol: s.investment_code || s.investment.slice(0, 14).toUpperCase(),
+        isin: (s.isin || '').trim(),
+        bondType: classifyBondType(s.investment, s.investment_code, s.isin),
+        broker: brokerLabel,
+        quantity: units,
+        averagePrice: nativeCost && units > 0 ? round2(investedVal / units) : null,
+        lastPrice: round2(unitPrice),
+        investedValue: round2(investedVal),
+        currentValue: round2(mktVal),
+        pnl: round2(pnl),
+        pnlPct: round2(pnlPct),
+        costBasisSource: nativeCost ? 'indmoney_native' : 'market_value_proxy'
+      });
+      continue;
+    }
 
     // If this row belongs to a non-Upstox broker (e.g., INDmoney native demat, Paytm Money, Zerodha, Groww)
     if (!belongsToUpstox) {
@@ -578,20 +803,51 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
     });
   }
 
-  // Add Upstox non-equity holdings (NCDs/Bonds) clearly flagged
+  // Add INDmoney dedicated BOND holdings (e.g., SGBs, NCDs, Corporate Bonds)
+  for (const b of indmoney?.bonds || ([] as RawIndmoneyBond[])) {
+    const mktVal = Number(b.market_value ?? 0);
+    const units = Number(b.total_units ?? 0);
+    if (mktVal <= 0 && units <= 0) continue;
+    const unitPrice = Number(b.unit_price ?? (units > 0 ? mktVal / units : 0));
+    const rawInv = typeof b.invested_amount === 'number' ? b.invested_amount : Number(b.invested_amount ?? 0);
+    const pnlVal = Number(b.total_pnl ?? 0);
+    const hasRealCost = Number.isFinite(rawInv) && rawInv > 0 && (Math.abs(pnlVal) > 0.01 || Math.abs(rawInv - mktVal) > 0.01);
+    const investedVal = hasRealCost ? rawInv : mktVal;
+    const pnl = hasRealCost ? Number(b.total_pnl ?? mktVal - investedVal) : 0;
+    const pnlPct = hasRealCost && investedVal > 0 ? (pnl / investedVal) * 100 : 0;
+    const brokerLabel = (b.broker || 'INDmoney').trim();
+
+    registerBond({
+      id: `bond:ind:${b.investment_code || b.investment}`,
+      name: b.investment,
+      symbol: b.investment_code || b.investment.slice(0, 14).toUpperCase(),
+      isin: (b.isin || '').trim(),
+      bondType: classifyBondType(b.investment, b.investment_code, b.isin),
+      broker: brokerLabel,
+      quantity: units,
+      averagePrice: hasRealCost && units > 0 ? round2(investedVal / units) : null,
+      lastPrice: round2(unitPrice),
+      investedValue: round2(investedVal),
+      currentValue: round2(mktVal),
+      pnl: round2(pnl),
+      pnlPct: round2(pnlPct),
+      costBasisSource: hasRealCost ? 'indmoney_native' : 'market_value_proxy'
+    });
+  }
+
+  // Add Upstox non-equity holdings (NCDs/SGBs/G-Secs/Bonds) into the dedicated Bonds section
   let upstoxBondsCurrent = 0;
   let upstoxBondsInvested = 0;
   for (const bond of nonEquityUpstox) {
     upstoxBondsCurrent += bond.currentValue;
     upstoxBondsInvested += bond.investedValue;
-    equities.push({
-      id: `bond:${bond.symbol}`,
-      symbol: bond.symbol,
+    registerBond({
+      id: `bond:up:${bond.symbol}`,
       name: bond.companyName,
+      symbol: bond.symbol,
       isin: bond.isin,
+      bondType: classifyBondType(bond.companyName, bond.symbol, bond.isin),
       broker: 'Upstox',
-      isExternalBroker: false,
-      isNonEquity: true,
       quantity: bond.quantity,
       averagePrice: round2(bond.averagePrice),
       lastPrice: round2(bond.lastPrice),
@@ -599,16 +855,12 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
       currentValue: round2(bond.currentValue),
       pnl: round2(bond.pnl),
       pnlPct: bond.investedValue > 0 ? round2((bond.pnl / bond.investedValue) * 100) : 0,
-      dayChangePct: round2(bond.dayChangePct),
-      marketCap: 'debt',
-      costBasisSource: 'upstox_live',
-      matchStatus: 'non_equity',
-      upstoxQty: bond.quantity,
-      upstoxValue: round2(bond.currentValue)
+      costBasisSource: 'upstox_live'
     });
   }
 
   equities.sort((a, b) => b.currentValue - a.currentValue);
+  bonds.sort((a, b) => b.currentValue - a.currentValue);
 
   const upstoxEquityTotal = upstoxNormalized
     .filter((u) => !u.isNonEquity)
@@ -917,7 +1169,7 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
   const externalCount = equities.filter(
     (e) => e.matchStatus === 'external' || e.matchStatus === 'upstox_standalone'
   ).length;
-  const nonEquityCount = equities.filter((e) => e.isNonEquity).length;
+  const nonEquityCount = bonds.length;
   const aggregateDiff =
     upstoxActive && indmoney && indmoneyHasUpstoxRows
       ? round2(indmoneyStockTotal - (upstoxEquityTotal + externalStockTotal))
@@ -943,6 +1195,7 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
     estimatedMonthlySipTotal,
     allocations,
     equities,
+    bonds,
     mutualFunds,
     activeSips,
     reconciliation: {
@@ -965,73 +1218,290 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
   return baseSnapshot;
 }
 
-export function findMatchingCostOverride(
-  equity: ReconciledEquity,
-  overrides: CostBasisOverride[]
-): CostBasisOverride | null {
-  if (overrides.length === 0) return null;
+interface MatchableHolding {
+  id: string;
+  name: string;
+  symbol: string;
+  isin: string;
+  broker: string;
+  quantity: number;
+  lastPrice: number;
+  investedValue: number;
+  currentValue: number;
+  costBasisSource: string;
+}
 
-  const eqIsin = (equity.isin || '').trim().toUpperCase();
-  const eqSym = (equity.symbol || '').trim().toUpperCase();
-  const eqNormName = normalizeCompact(equity.name);
-  const eqIdKey = `id:${equity.id.toLowerCase()}`;
+function isPriceNear(csvPrice: number | undefined, holdingPrice: number, pctTol = 0.025, absFloor = 1.5): boolean {
+  if (!csvPrice || csvPrice <= 0 || holdingPrice <= 0) return false;
+  return Math.abs(csvPrice - holdingPrice) <= Math.max(absFloor, holdingPrice * pctTol);
+}
 
-  // Prefer explicit manual overrides over CSV imports if both exist
-  const ordered = [...overrides].sort((a, b) => (a.source === 'manual' ? -1 : b.source === 'manual' ? 1 : 0));
+function scoreOverrideLexicalMatch(holding: MatchableHolding, ov: CostBasisOverride): number {
+  const hIdKey = `id:${holding.id.toLowerCase()}`;
+  if (ov.holdingKey === hIdKey) return 10;
 
-  for (const ov of ordered) {
-    // Respect broker filter when present on CSV import (unless exact ISIN/manual id match)
-    if (ov.holdingKey === eqIdKey) return ov;
-    if (eqIsin && ov.isin && ov.isin.toUpperCase() === eqIsin) return ov;
-    if (eqSym && ov.symbol && ov.symbol.toUpperCase() === eqSym) return ov;
-    if (eqNormName && normalizeCompact(ov.displayName) === eqNormName) return ov;
-    if (ov.symbol && eqNormName && normalizeCompact(ov.symbol) === eqNormName) return ov;
+  const hIsin = (holding.isin || '').trim().toUpperCase();
+  if (hIsin && ov.isin && ov.isin.trim().toUpperCase() === hIsin) return 5;
+
+  const hSym = (holding.symbol || '').trim().toUpperCase();
+  const ovSym = (ov.symbol || '').trim().toUpperCase();
+  if (hSym && ovSym && hSym === ovSym) return 4.5;
+
+  const hVariants = extractNameVariants(holding.name);
+  const ovVariants = extractNameVariants(ov.displayName);
+  if (ovSym) ovVariants.push(ovSym);
+
+  const hCompacts = new Set(hVariants.map(normalizeCompact).filter(Boolean));
+  const hSymCompact = normalizeSymbolCompact(hSym);
+
+  for (const ovVar of ovVariants) {
+    const ovCompact = normalizeCompact(ovVar);
+    const ovSymCompact = normalizeSymbolCompact(ovVar);
+    if (ovCompact && hCompacts.has(ovCompact)) return 4.0;
+    if (hSymCompact && ovSymCompact && hSymCompact === ovSymCompact && hSymCompact.length >= 2) return 3.8;
   }
 
-  // Secondary fuzzy token match for ETFs / external holdings with minor naming differences
-  for (const ov of ordered) {
-    if (tokenSimilarity(equity.name, ov.displayName) >= 0.75) {
-      return ov;
+  // Bidirectional acronym match (e.g., "Philips Carbon Black" <-> "PCBL Ltd", "Rural Electrification Corp" <-> "REC Ltd")
+  if (hasAcronymMatch(holding.name, ov.displayName)) {
+    return isPriceNear(ov.csvCurrentPrice, holding.lastPrice) ? 3.2 : 2.5;
+  }
+
+  let bestScore = 0;
+  const priceNear = isPriceNear(ov.csvCurrentPrice, holding.lastPrice);
+
+  for (const hv of hVariants) {
+    for (const ovv of ovVariants) {
+      const tokSim = tokenSimilarity(hv, ovv);
+      const sub = subsetTokenSimilarity(hv, ovv);
+
+      if (tokSim >= 0.72) {
+        bestScore = Math.max(bestScore, 2.0 + tokSim);
+      } else if (sub.minSize >= 2 && sub.ratio >= 0.85) {
+        // e.g. "Cholamandalam Investment" vs "Cholamandalam Investment & Finance Company Ltd" (2/2 = 1.0)
+        // or "Godawari Pow & Isp" vs "Godawari Power & Ispat Ltd" (3/3 = 1.0)
+        bestScore = Math.max(bestScore, 1.85 + sub.ratio * 0.5);
+      } else if (priceNear && (tokSim >= 0.45 || (sub.minSize >= 1 && sub.ratio >= 0.75))) {
+        bestScore = Math.max(bestScore, 1.5 + Math.max(tokSim, sub.ratio * 0.8));
+      }
     }
   }
 
-  return null;
+  return bestScore;
+}
+
+export function findMatchingCostOverride(
+  holding: Pick<MatchableHolding, 'id' | 'name' | 'symbol' | 'isin' | 'broker' | 'quantity' | 'lastPrice'>,
+  overrides: CostBasisOverride[],
+  options?: { allowBrokerConflict?: boolean }
+): CostBasisOverride | null {
+  if (overrides.length === 0) return null;
+
+  let bestOv: CostBasisOverride | null = null;
+  let bestRank = 0;
+
+  for (const ov of overrides) {
+    if (ov.averagePrice <= 0) continue;
+    const hIdKey = `id:${holding.id.toLowerCase()}`;
+    const isDirectManualId = ov.holdingKey === hIdKey;
+
+    if (!isDirectManualId && !options?.allowBrokerConflict && ov.source === 'csv_import' && brokersConflict(ov.broker, holding.broker)) {
+      continue;
+    }
+
+    const baseScore = scoreOverrideLexicalMatch(
+      { ...holding, investedValue: 0, currentValue: 0, costBasisSource: '' },
+      ov
+    );
+    if (baseScore <= 0) continue;
+
+    // Prefer manual overrides > broker-matched CSV > exact-qty CSV > general CSV
+    let rank = baseScore;
+    if (ov.source === 'manual') rank += 5;
+    if (brokersMatch(ov.broker, holding.broker)) rank += 1.2;
+    if (ov.csvQty !== undefined && Math.abs(ov.csvQty - holding.quantity) < 0.01) rank += 0.6;
+    if (isPriceNear(ov.csvCurrentPrice, holding.lastPrice, 0.015, 0.75)) rank += 0.4;
+
+    if (rank > bestRank) {
+      bestRank = rank;
+      bestOv = ov;
+    }
+  }
+
+  return bestOv;
+}
+
+function buildPartialCostBasisNote(holdingQty: number, ov: CostBasisOverride): string | undefined {
+  if (ov.source !== 'csv_import' || !ov.csvQty || ov.csvQty <= 0) return undefined;
+  if (Math.abs(holdingQty - ov.csvQty) <= 0.01) return undefined;
+  const label = ov.broker ? `${ov.broker} CSV` : 'CSV';
+  if (holdingQty > ov.csvQty) {
+    const diff = round2(holdingQty - ov.csvQty);
+    return `${label} covered ${round2(ov.csvQty)} of ${round2(holdingQty)} units (${diff} in another broker — click Avg Cost to enter blended price)`;
+  }
+  return `${label} had ${round2(ov.csvQty)} units vs ${round2(holdingQty)} synced — click Avg Cost to verify`;
 }
 
 /**
- * Applies saved manual & CSV average-cost overrides to a snapshot and recalculates
- * equity P&L, STOCK allocation, and total adjusted invested / unrealized gain.
+ * Applies saved manual & CSV average-cost overrides to both equities and bonds in a snapshot,
+ * recalculates P&L, allocations, and total adjusted invested / unrealized gain, and reports
+ * any CSV overrides that could not be matched.
  */
 export function applyCostOverridesToSnapshot(
   snapshot: PortfolioSnapshot,
   overrides: CostBasisOverride[]
-): { snapshot: PortfolioSnapshot; matchedCount: number } {
-  let matchedCount = 0;
-  let investedDelta = 0;
+): {
+  snapshot: PortfolioSnapshot;
+  matchedCount: number;
+  matchedOverrideKeys: string[];
+  unmatchedOverrideNames: string[];
+} {
+  if (overrides.length === 0) {
+    return { snapshot, matchedCount: 0, matchedOverrideKeys: [], unmatchedOverrideNames: [] };
+  }
 
-  const nextEquities = snapshot.equities.map((e) => {
-    if (e.isNonEquity) return e;
+  const canApplyOverride = (costBasisSource: string, ov: CostBasisOverride): boolean =>
+    ov.source === 'manual' ||
+    costBasisSource === 'market_value_proxy' ||
+    costBasisSource === 'csv_import' ||
+    costBasisSource === 'manual_override';
+
+  const matchedOverrideKeys = new Set<string>();
+  const equityMatches = new Map<number, CostBasisOverride>();
+  const bondMatches = new Map<number, CostBasisOverride>();
+  const currentBonds = snapshot.bonds || [];
+
+  // Pass 1: Direct, broker-aware, and strong lexical/subset/acronym matching across Equities & Bonds
+  snapshot.equities.forEach((e, idx) => {
+    if (e.isNonEquity) return;
     const match = findMatchingCostOverride(e, overrides);
-    if (!match || match.averagePrice <= 0) return e;
+    if (match && match.averagePrice > 0 && canApplyOverride(e.costBasisSource, match)) {
+      equityMatches.set(idx, match);
+      matchedOverrideKeys.add(match.holdingKey);
+    }
+  });
 
-    // CSV imports fill missing/previous-override cost basis without overwriting live Upstox/INDmoney broker cost basis;
-    // explicit manual overrides always apply.
-    const canApply =
-      match.source === 'manual' ||
-      e.costBasisSource === 'market_value_proxy' ||
-      e.costBasisSource === 'csv_import' ||
-      e.costBasisSource === 'manual_override';
+  currentBonds.forEach((b, idx) => {
+    const match = findMatchingCostOverride(b, overrides);
+    if (match && match.averagePrice > 0 && canApplyOverride(b.costBasisSource, match)) {
+      bondMatches.set(idx, match);
+      matchedOverrideKeys.add(match.holdingKey);
+    }
+  });
 
-    if (!canApply) return e;
+  // Pass 2: Unclaimed CSV overrides -> unmatched holdings
+  // 2a: Aggregated split-broker holdings where INDmoney combined quantities under another broker's label
+  // 2b: Renamed securities (e.g., Swiggy Limited <-> Bundl Technologies, Nykaa <-> FSN E-Commerce) via exact (LTP, Qty) or weak-lexical + LTP
+  const unclaimedCsv = overrides.filter(
+    (ov) => ov.source === 'csv_import' && ov.averagePrice > 0 && !matchedOverrideKeys.has(ov.holdingKey)
+  );
+
+  if (unclaimedCsv.length > 0) {
+    const tryPass2ForList = <T extends MatchableHolding>(
+      list: T[],
+      matchMap: Map<number, CostBasisOverride>,
+      skipFn?: (item: T) => boolean
+    ) => {
+      // 2a: Split-broker aggregated name match (allow broker conflict ONLY when holding.quantity > ov.csvQty)
+      list.forEach((item, idx) => {
+        if (matchMap.has(idx) || (skipFn && skipFn(item))) return;
+        const available = unclaimedCsv.filter((ov) => !matchedOverrideKeys.has(ov.holdingKey));
+        const match = findMatchingCostOverride(item, available, { allowBrokerConflict: true });
+        if (
+          match &&
+          canApplyOverride(item.costBasisSource, match) &&
+          match.csvQty !== undefined &&
+          item.quantity > match.csvQty + 0.01
+        ) {
+          matchMap.set(idx, match);
+          matchedOverrideKeys.add(match.holdingKey);
+        }
+      });
+
+      // 2b: LTP + weak lexical OR unambiguous exact (LTP, Qty) match
+      list.forEach((item, idx) => {
+        if (matchMap.has(idx) || (skipFn && skipFn(item))) return;
+        if (!canApplyOverride(item.costBasisSource, { ...unclaimedCsv[0], source: 'csv_import' })) return;
+
+        const candidates = unclaimedCsv.filter(
+          (ov) => !matchedOverrideKeys.has(ov.holdingKey) && !brokersConflict(ov.broker, item.broker)
+        );
+        if (candidates.length === 0) return;
+
+        // Weak lexical + near LTP
+        let bestWeak: CostBasisOverride | null = null;
+        let bestWeakSim = 0;
+        for (const ov of candidates) {
+          if (!isPriceNear(ov.csvCurrentPrice, item.lastPrice, 0.025, 1.5)) continue;
+          const sim = Math.max(
+            tokenSimilarity(item.name, ov.displayName),
+            subsetTokenSimilarity(item.name, ov.displayName).ratio * 0.9
+          );
+          if (sim >= 0.35 && sim > bestWeakSim) {
+            bestWeakSim = sim;
+            bestWeak = ov;
+          }
+        }
+        if (bestWeak) {
+          matchMap.set(idx, bestWeak);
+          matchedOverrideKeys.add(bestWeak.holdingKey);
+          return;
+        }
+
+        // Unambiguous exact (LTP within 1.5%, Qty exact) match
+        const exactPriceQty = candidates.filter(
+          (ov) =>
+            ov.csvQty !== undefined &&
+            Math.abs(ov.csvQty - item.quantity) < 0.01 &&
+            isPriceNear(ov.csvCurrentPrice, item.lastPrice, 0.015, 0.75)
+        );
+        if (exactPriceQty.length === 1) {
+          matchMap.set(idx, exactPriceQty[0]);
+          matchedOverrideKeys.add(exactPriceQty[0].holdingKey);
+        }
+      });
+    };
+
+    tryPass2ForList(snapshot.equities, equityMatches, (e) => e.isNonEquity);
+    tryPass2ForList(currentBonds, bondMatches);
+  }
+
+  let matchedCount = 0;
+  let equityInvestedDelta = 0;
+  let bondInvestedDelta = 0;
+
+  const nextEquities = snapshot.equities.map((e, idx) => {
+    const match = equityMatches.get(idx);
+    if (!match) return e;
 
     matchedCount += 1;
     const newInvested = round2(e.quantity * match.averagePrice);
     const newPnl = round2(e.currentValue - newInvested);
     const newPnlPct = newInvested > 0 ? round2((newPnl / newInvested) * 100) : 0;
-    investedDelta += newInvested - e.investedValue;
+    equityInvestedDelta += newInvested - e.investedValue;
 
     return {
       ...e,
+      averagePrice: round2(match.averagePrice),
+      investedValue: newInvested,
+      pnl: newPnl,
+      pnlPct: newPnlPct,
+      costBasisSource: match.source === 'csv_import' ? ('csv_import' as const) : ('manual_override' as const),
+      partialCostBasisNote: buildPartialCostBasisNote(e.quantity, match)
+    };
+  });
+
+  const nextBonds = currentBonds.map((b, idx) => {
+    const match = bondMatches.get(idx);
+    if (!match) return b;
+
+    matchedCount += 1;
+    const newInvested = round2(b.quantity * match.averagePrice);
+    const newPnl = round2(b.currentValue - newInvested);
+    const newPnlPct = newInvested > 0 ? round2((newPnl / newInvested) * 100) : 0;
+    bondInvestedDelta += newInvested - b.investedValue;
+
+    return {
+      ...b,
       averagePrice: round2(match.averagePrice),
       investedValue: newInvested,
       pnl: newPnl,
@@ -1040,37 +1510,55 @@ export function applyCostOverridesToSnapshot(
     };
   });
 
+  const matchedKeysArr = Array.from(matchedOverrideKeys);
+  const unmatchedOverrideNames = overrides
+    .filter((ov) => ov.source === 'csv_import' && !matchedOverrideKeys.has(ov.holdingKey))
+    .map((ov) => ov.displayName);
+
   if (matchedCount === 0) {
-    return { snapshot, matchedCount: 0 };
+    return { snapshot, matchedCount: 0, matchedOverrideKeys: matchedKeysArr, unmatchedOverrideNames };
   }
 
-  const nextTotalInvestedAdjusted = round2(Math.max(0, snapshot.totalInvestedAdjusted + investedDelta));
+  const totalInvestedDelta = equityInvestedDelta + bondInvestedDelta;
+  const nextTotalInvestedAdjusted = round2(Math.max(0, snapshot.totalInvestedAdjusted + totalInvestedDelta));
   const nextTotalGain = round2(snapshot.totalNetworth - nextTotalInvestedAdjusted);
   const nextTotalGainPct =
     nextTotalInvestedAdjusted > 0 ? round2((nextTotalGain / nextTotalInvestedAdjusted) * 100) : 0;
 
+  const hasBondAlloc = snapshot.allocations.some((a) => a.assetType === 'BOND');
   const nextAllocations = snapshot.allocations.map((a) => {
-    if (a.assetType !== 'STOCK') return a;
-    const nextStockInv = round2(Math.max(0, a.investedValue + investedDelta));
-    const nextStockRet = round2(a.currentValue - nextStockInv);
-    const nextStockPct = nextStockInv > 0 ? round2((nextStockRet / nextStockInv) * 100) : 0;
+    let delta = 0;
+    if (a.assetType === 'STOCK') {
+      delta = equityInvestedDelta + (hasBondAlloc ? 0 : bondInvestedDelta);
+    } else if (a.assetType === 'BOND') {
+      delta = bondInvestedDelta;
+    } else {
+      return a;
+    }
+    if (Math.abs(delta) < 0.005) return a;
+    const nextInv = round2(Math.max(0, a.investedValue + delta));
+    const nextRet = round2(a.currentValue - nextInv);
+    const nextPct = nextInv > 0 ? round2((nextRet / nextInv) * 100) : 0;
     return {
       ...a,
-      investedValue: nextStockInv,
-      returnValue: nextStockRet,
-      returnPct: nextStockPct
+      investedValue: nextInv,
+      returnValue: nextRet,
+      returnPct: nextPct
     };
   });
 
   return {
     matchedCount,
+    matchedOverrideKeys: matchedKeysArr,
+    unmatchedOverrideNames,
     snapshot: {
       ...snapshot,
       totalInvestedAdjusted: nextTotalInvestedAdjusted,
       totalUnrealizedGain: nextTotalGain,
       totalUnrealizedGainPct: nextTotalGainPct,
       allocations: nextAllocations,
-      equities: nextEquities
+      equities: nextEquities,
+      bonds: nextBonds
     }
   };
 }

@@ -38,11 +38,11 @@ const PROMPTS_BY_TAB: Record<string, string[]> = {
     'Suggest a balanced SIP step-down plan if a major EMI starts soon.'
   ],
   strategy: [
-    'Check how well my current portfolio aligns with my written Strategy & Goals.',
-    'What gaps do you see in my emergency buffer or milestone plan?'
+    'Check how well my current portfolio and insurance policies align with my Strategy & Goals.',
+    'What gaps do you see in my emergency buffer, term/health cover, or milestone plan?'
   ],
   insights: [
-    'Give me 3 concrete action items from my latest snapshot.',
+    'Give me 3 concrete action items from my latest audit alerts and holdings.',
     'Which holdings are candidates for tax-loss harvesting or trimming?'
   ],
   settings: [

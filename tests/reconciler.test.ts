@@ -375,7 +375,8 @@ describe('reconcilePortfolio', () => {
 
     expect(snap.reconciliation.unmatchedUpstox).toHaveLength(0);
     expect(snap.equities.filter((e) => !e.isNonEquity)).toHaveLength(3);
-    expect(snap.equities.filter((e) => e.isNonEquity)).toHaveLength(1);
+    expect(snap.bonds).toHaveLength(1);
+    expect(snap.bonds?.[0].bondType).toBe('NCD');
     expect(snap.mutualFunds).toHaveLength(1);
     expect(snap.activeSips).toHaveLength(1);
     // Equities (170k + 14k + 33k = 217k) + MF (85k) + NCD Bond (10.55k) + Cash Margin (1.2k) = 313,750
@@ -436,5 +437,97 @@ describe('reconcilePortfolio', () => {
     // Total adjusted invested drops by ₹133,000 (from 1,463,500 to 1,330,500)
     expect(updated.totalInvestedAdjusted).toBe(1330500);
     expect(updated.totalUnrealizedGain).toBe(updated.totalNetworth - 1330500);
+  });
+
+  it('matches Paytm Money CSV abbreviations, hyphenated names, acronyms, LTP+Qty renames, SGBs, and handles split-broker holdings', () => {
+    const ind: IndmoneyFetchPayload = {
+      networth: {
+        total_invested: 450000,
+        total_current_value: 450000,
+        total_networth: 450000,
+        investments: [{ asset_type: 'STOCK', invested_value: 450000, current_value: 450000 }]
+      },
+      stocks: [
+        { investment: 'Cholamandalam Investment & Finance Company Ltd', investment_code: 'INDS1', broker: 'Paytm Money', total_units: 60, unit_price: 1870, market_value: 112200 },
+        { investment: 'Godawari Power & Ispat Ltd', investment_code: 'INDS2', broker: 'Paytm Money', total_units: 50, unit_price: 210, market_value: 10500 },
+        { investment: 'Larsen & Toubro Ltd', investment_code: 'INDS3', broker: 'Paytm Money', total_units: 10, unit_price: 3600, market_value: 36000 },
+        { investment: 'PCBL Ltd', investment_code: 'INDS4', broker: 'Paytm Money', total_units: 40, unit_price: 420, market_value: 16800 },
+        { investment: 'Bundl Technologies Ltd', investment_code: 'INDS5', broker: 'Paytm Money', total_units: 20, unit_price: 178.2, market_value: 3564 },
+        // Split-broker ITC Hotels: separate rows in Paytm Money (16) and Pinnacle (4)
+        { investment: 'ITC Hotels Ltd', investment_code: 'INDS6', broker: 'Paytm Money', total_units: 16, unit_price: 190, market_value: 3040 },
+        { investment: 'ITC Hotels Ltd', investment_code: 'INDS7', broker: 'Pinnacle', total_units: 4, unit_price: 190, market_value: 760 },
+        // Aggregated split-broker stock (20 total synced, CSV has 12)
+        { investment: 'Tata Steel Ltd', investment_code: 'INDS8', broker: 'Paytm Money', total_units: 20, unit_price: 150, market_value: 3000 },
+        // Oil India vs Indian Oil Corporation must match their exact respective holdings without cross-matching
+        { investment: 'Oil India Ltd', investment_code: 'INDS10', broker: 'Paytm Money', total_units: 100, unit_price: 432, market_value: 43200 },
+        { investment: 'Indian Oil Corporation Ltd', investment_code: 'INDS11', broker: 'Paytm Money', total_units: 100, unit_price: 150.5, market_value: 15050 },
+        // Apostrophe normalization: "KWALITY WALL'S (INDIA) L" vs "Kwality Walls India Ltd"
+        { investment: 'Kwality Walls India Ltd', investment_code: 'INDS12', broker: 'Paytm Money', total_units: 20, unit_price: 43.58, market_value: 871.6 },
+        // SGB appearing inside INDmoney stocks -> routed to snapshot.bonds!
+        { investment: '2.5% SGB 27-Jun-2031', investment_code: 'INDS9', broker: 'Paytm Money', total_units: 10, unit_price: 7920, market_value: 79200 }
+      ],
+      mutualFunds: [],
+      mfSips: [],
+      stockSips: []
+    };
+
+    const baseSnap = reconcilePortfolio({
+      indmoney: ind,
+      upstox: null,
+      upstoxState: 'not_linked',
+      aliases: [],
+      profile: { ...DEFAULT_USER_PROFILE },
+      isDemo: false
+    });
+
+    // SGB cleanly separated into snapshot.bonds
+    expect(baseSnap.bonds).toHaveLength(1);
+    expect(baseSnap.bonds?.[0].bondType).toBe('SGB');
+    expect(baseSnap.equities).toHaveLength(11);
+
+    const { snapshot: updated, matchedCount, unmatchedOverrideNames } = applyCostOverridesToSnapshot(baseSnap, [
+      { holdingKey: 'name:cholamandalaminvestment@paytmmoney', displayName: 'Cholamandalam Investment', broker: 'Paytm Money', averagePrice: 1200, csvQty: 60, csvCurrentPrice: 1870, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:godawaripowisp@paytmmoney', displayName: 'Godawari Pow & Isp', broker: 'Paytm Money', averagePrice: 180, csvQty: 50, csvCurrentPrice: 210, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:ltlarsentoubro@paytmmoney', displayName: 'LT - Larsen & Toubro', broker: 'Paytm Money', averagePrice: 3100, csvQty: 10, csvCurrentPrice: 3600, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:philipscarbonblack@paytmmoney', displayName: 'Philips Carbon Black', broker: 'Paytm Money', averagePrice: 300, csvQty: 40, csvCurrentPrice: 420, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:swiggy@paytmmoney', displayName: 'Swiggy Limited', broker: 'Paytm Money', averagePrice: 390, csvQty: 20, csvCurrentPrice: 178.2, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:itchotels@paytmmoney', displayName: 'ITC Hotels Limited', broker: 'Paytm Money', averagePrice: 165, csvQty: 16, csvCurrentPrice: 190, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:tatasteel@paytmmoney', displayName: 'Tata Steel Limited', broker: 'Paytm Money', averagePrice: 120, csvQty: 12, csvCurrentPrice: 150, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:oilindia@paytmmoney', displayName: 'Oil India', broker: 'Paytm Money', averagePrice: 340, csvQty: 100, csvCurrentPrice: 432, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:indianoilcorp@paytmmoney', displayName: 'Indian Oil Corp', broker: 'Paytm Money', averagePrice: 130, csvQty: 100, csvCurrentPrice: 150.5, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:kwalitywallsindial@paytmmoney', displayName: "KWALITY WALL'S (INDIA) L", broker: 'Paytm Money', averagePrice: 44.71, csvQty: 20, csvCurrentPrice: 43.58, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:25sgb27jun2031@paytmmoney', displayName: '2.5% SGB 27-Jun-2031', broker: 'Paytm Money', averagePrice: 5926, csvQty: 10, csvCurrentPrice: 7920, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' },
+      { holdingKey: 'name:ghostcompany@paytmmoney', displayName: 'Unmatched Ghost Holding', broker: 'Paytm Money', averagePrice: 100, csvQty: 5, csvCurrentPrice: 999, source: 'csv_import', updatedAt: '2026-11-22T00:00:00Z' }
+    ]);
+
+    // 10 matched equities + 1 matched SGB bond = 11
+    expect(matchedCount).toBe(11);
+    expect(unmatchedOverrideNames).toEqual(['Unmatched Ghost Holding']);
+
+    expect(updated.equities.find((e) => e.name.includes('Cholamandalam'))?.averagePrice).toBe(1200);
+    expect(updated.equities.find((e) => e.name.includes('Godawari'))?.averagePrice).toBe(180);
+    expect(updated.equities.find((e) => e.name.includes('Larsen'))?.averagePrice).toBe(3100);
+    expect(updated.equities.find((e) => e.name === 'PCBL Ltd')?.averagePrice).toBe(300);
+    expect(updated.equities.find((e) => e.name.includes('Bundl'))?.averagePrice).toBe(390);
+    expect(updated.equities.find((e) => e.name === 'Oil India Ltd')?.averagePrice).toBe(340);
+    expect(updated.equities.find((e) => e.name === 'Indian Oil Corporation Ltd')?.averagePrice).toBe(130);
+    expect(updated.equities.find((e) => e.name.includes('Kwality'))?.averagePrice).toBe(44.71);
+
+    // Split-broker: Paytm Money ITC Hotels matched cleanly, Pinnacle ITC Hotels NOT overwritten
+    const itcPaytm = updated.equities.find((e) => e.name.includes('ITC Hotels') && e.broker === 'Paytm Money');
+    const itcPinnacle = updated.equities.find((e) => e.name.includes('ITC Hotels') && e.broker === 'Pinnacle');
+    expect(itcPaytm?.averagePrice).toBe(165);
+    expect(itcPaytm?.partialCostBasisNote).toBeUndefined();
+    expect(itcPinnacle?.averagePrice).toBeNull();
+
+    // Aggregated split-broker Tata Steel shows partialCostBasisNote (12 of 20 units)
+    const tataSteel = updated.equities.find((e) => e.name.includes('Tata Steel'));
+    expect(tataSteel?.averagePrice).toBe(120);
+    expect(tataSteel?.partialCostBasisNote).toContain('12 of 20 units');
+
+    // SGB bond got its CSV avg cost & P&L
+    expect(updated.bonds?.[0].averagePrice).toBe(5926);
+    expect(updated.bonds?.[0].costBasisSource).toBe('csv_import');
+    expect(updated.bonds?.[0].pnl).toBe(19940);
   });
 });

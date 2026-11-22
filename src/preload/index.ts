@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import {
+  AdvisorTopic,
   AIChatMessage,
   AIProviderId,
   AIReportRecord,
@@ -7,6 +8,7 @@ import {
   BrokerId,
   CostBasisOverride,
   CsvImportResult,
+  InsurancePolicy,
   SipBaselineItem,
   SymbolAlias,
   SyncResult,
@@ -35,6 +37,8 @@ export interface PortfolioPulseApi {
   }) => Promise<CostBasisOverride[]>;
   deleteCostOverride: (holdingKey: string) => Promise<CostBasisOverride[]>;
   importCostCsv: () => Promise<CsvImportResult>;
+  saveInsurancePolicy: (policy: InsurancePolicy) => Promise<InsurancePolicy[]>;
+  deleteInsurancePolicy: (id: number) => Promise<InsurancePolicy[]>;
   saveAiApiKey: (provider: AIProviderId, apiKey: string) => Promise<boolean>;
   clearAiApiKey: (provider: AIProviderId) => Promise<boolean>;
   listAiModels: (payload: {
@@ -43,6 +47,11 @@ export interface PortfolioPulseApi {
     baseUrl?: string;
   }) => Promise<Array<{ id: string; displayName: string }>>;
   generateAiReport: () => Promise<AIReportRecord>;
+  validateAdvisorInput: (payload: {
+    topic: AdvisorTopic;
+    advisorName?: string;
+    pitchText: string;
+  }) => Promise<AIReportRecord>;
   sendAiChat: (message: string) => Promise<{ userMsg: AIChatMessage; assistantMsg: AIChatMessage }>;
   clearAiChat: () => Promise<boolean>;
   exportBundle: () => Promise<{ canceled: boolean; directory?: string; files?: string[] }>;
@@ -67,10 +76,13 @@ const api: PortfolioPulseApi = {
   saveCostOverride: (payload) => ipcRenderer.invoke('costOverride:save', payload),
   deleteCostOverride: (holdingKey) => ipcRenderer.invoke('costOverride:delete', holdingKey),
   importCostCsv: () => ipcRenderer.invoke('costOverride:importCsv'),
+  saveInsurancePolicy: (policy) => ipcRenderer.invoke('insurance:save', policy),
+  deleteInsurancePolicy: (id) => ipcRenderer.invoke('insurance:delete', id),
   saveAiApiKey: (provider, apiKey) => ipcRenderer.invoke('ai:saveApiKey', { provider, apiKey }),
   clearAiApiKey: (provider) => ipcRenderer.invoke('ai:clearApiKey', provider),
   listAiModels: (payload) => ipcRenderer.invoke('ai:listModels', payload),
   generateAiReport: () => ipcRenderer.invoke('ai:generateReport'),
+  validateAdvisorInput: (payload) => ipcRenderer.invoke('ai:validateAdvisorInput', payload),
   sendAiChat: (message) => ipcRenderer.invoke('ai:sendChat', message),
   clearAiChat: () => ipcRenderer.invoke('ai:clearChat'),
   exportBundle: () => ipcRenderer.invoke('export:bundle'),

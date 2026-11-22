@@ -2,10 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import { app, dialog, ipcMain, BrowserWindow, shell } from 'electron';
 import {
+  AdvisorTopic,
   AIProviderId,
   AppStatePayload,
   BrokerId,
   CostBasisOverride,
+  InsurancePolicy,
   SipBaselineItem,
   SymbolAlias,
   UserProfile
@@ -17,11 +19,16 @@ import { UpstoxAdapter } from '@main/mcp/upstoxAdapter';
 import { SyncOrchestrator } from '@main/engine/syncOrchestrator';
 import { DailySyncScheduler } from '@main/engine/scheduler';
 import { ensureDemoSeeded } from '@main/demo/demoDataset';
-import { buildPortfolioContextBlock, buildReviewPrompt, buildSystemPrompt } from '@main/ai/promptBuilder';
+import {
+  buildAdvisorValidationPrompt,
+  buildPortfolioContextBlock,
+  buildReviewPrompt,
+  buildSystemPrompt
+} from '@main/ai/promptBuilder';
 import { listProviderModels, runLLMCompletion } from '@main/ai/providers';
 import { exportPortfolioBundle } from '@main/engine/exporter';
 import { applyCostOverridesToSnapshot } from '@main/engine/reconciler';
-import { parseBrokerHoldingsCsv } from '@main/engine/csvCostParser';
+import { inferBrokerFromFilename, parseBrokerHoldingsCsv } from '@main/engine/csvCostParser';
 import { runPortfolioAudit } from '@main/engine/auditor';
 
 export interface IpcContext {
@@ -67,6 +74,7 @@ export function buildAppState(ctx: IpcContext): AppStatePayload {
     sipBaselines: repo.getSipBaselines(isDemoMode),
     aliases: repo.getAliases(),
     costOverrides: repo.getCostOverrides(),
+    insurancePolicies: repo.getInsurancePolicies(isDemoMode),
     reports: repo.getAIReports(isDemoMode),
     chatMessages: repo.getChatMessages(isDemoMode)
   };
@@ -201,12 +209,12 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     return repo.getAliases();
   });
 
-  const reapplyOverridesToCurrentSnapshot = (): number => {
+  const reapplyOverridesToCurrentSnapshot = (): { matchedCount: number; matchedOverrideKeys: Set<string> } => {
     const isDemo = repo.isDemoMode();
     const latest = repo.getLatestSnapshot(isDemo);
-    if (!latest) return 0;
+    if (!latest) return { matchedCount: 0, matchedOverrideKeys: new Set() };
     const overrides = repo.getCostOverrides();
-    const { snapshot: updatedSnap, matchedCount } = applyCostOverridesToSnapshot(latest, overrides);
+    const { snapshot: updatedSnap, matchedCount, matchedOverrideKeys } = applyCostOverridesToSnapshot(latest, overrides);
     if (matchedCount > 0) {
       const id = repo.saveSnapshot(updatedSnap);
       const prev = repo.getPreviousSnapshot(isDemo, updatedSnap.snapshotDate);
@@ -218,7 +226,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       });
       repo.replaceAlertsForSnapshot(isDemo, id, alerts);
     }
-    return matchedCount;
+    return { matchedCount, matchedOverrideKeys: new Set(matchedOverrideKeys) };
   };
 
   ipcMain.handle(
@@ -277,34 +285,61 @@ export function registerIpcHandlers(ctx: IpcContext): void {
 
     const filePath = picked.filePaths[0];
     const fileName = path.basename(filePath);
+    const detectedBroker = inferBrokerFromFilename(fileName);
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      const parsed = parseBrokerHoldingsCsv(content);
+      const parsed = parseBrokerHoldingsCsv(content, detectedBroker);
       if (parsed.length === 0) {
         return {
           canceled: false,
           fileName,
+          detectedBroker,
           parsedCount: 0,
           matchedInSnapshot: 0,
+          unmatchedNames: [],
           error: 'No valid holdings with average buy price were found in that CSV.'
         };
       }
       repo.saveCostOverridesBulk(parsed);
-      const matchedInSnapshot = reapplyOverridesToCurrentSnapshot();
+      const { matchedOverrideKeys } = reapplyOverridesToCurrentSnapshot();
+      const matchedFromFile = parsed.filter((p) => matchedOverrideKeys.has(p.holdingKey));
+      const unmatchedNames = parsed
+        .filter((p) => !matchedOverrideKeys.has(p.holdingKey))
+        .map((p) => p.displayName);
       broadcastState();
       return {
         canceled: false,
         fileName,
+        detectedBroker,
         parsedCount: parsed.length,
-        matchedInSnapshot
+        matchedInSnapshot: matchedFromFile.length,
+        unmatchedNames
       };
     } catch (err) {
       return {
         canceled: false,
         fileName,
+        detectedBroker,
         error: err instanceof Error ? err.message : String(err)
       };
     }
+  });
+
+  ipcMain.handle('insurance:save', (_event, policy: InsurancePolicy) => {
+    const isDemo = repo.isDemoMode();
+    if (!policy.insurer.trim() || !policy.planName.trim()) {
+      throw new Error('Insurer and Plan Name are required.');
+    }
+    repo.saveInsurancePolicy(isDemo, policy);
+    broadcastState();
+    return repo.getInsurancePolicies(isDemo);
+  });
+
+  ipcMain.handle('insurance:delete', (_event, id: number) => {
+    const isDemo = repo.isDemoMode();
+    repo.deleteInsurancePolicy(id);
+    broadcastState();
+    return repo.getInsurancePolicies(isDemo);
   });
 
   ipcMain.handle('ai:saveApiKey', (_event, payload: { provider: AIProviderId; apiKey: string }) => {
@@ -346,9 +381,10 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     const profile = repo.getProfile();
     const previous = repo.getPreviousSnapshot(isDemo, snapshot.snapshotDate);
     const alerts = repo.getAlerts(isDemo);
+    const policies = repo.getInsurancePolicies(isDemo);
     const apiKey = store.getSecret(`ai_key:${profile.aiProvider}`);
 
-    const contextBlock = buildPortfolioContextBlock(snapshot, previous, alerts, profile);
+    const contextBlock = buildPortfolioContextBlock(snapshot, previous, alerts, profile, policies);
     const completion = await runLLMCompletion({
       provider: profile.aiProvider,
       model: profile.aiModel,
@@ -370,6 +406,74 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     return report;
   });
 
+  ipcMain.handle(
+    'ai:validateAdvisorInput',
+    async (
+      _event,
+      payload: {
+        topic: AdvisorTopic;
+        advisorName?: string;
+        pitchText: string;
+      }
+    ) => {
+      const trimmedPitch = (payload.pitchText || '').trim();
+      if (!trimmedPitch) {
+        throw new Error('Please paste or describe the advisor recommendation first.');
+      }
+
+      const isDemo = repo.isDemoMode();
+      const snapshot = repo.getLatestSnapshot(isDemo);
+      if (!snapshot) {
+        throw new Error('No portfolio snapshot available yet. Sync your portfolio or enable Demo Mode first.');
+      }
+
+      const profile = repo.getProfile();
+      const previous = repo.getPreviousSnapshot(isDemo, snapshot.snapshotDate);
+      const alerts = repo.getAlerts(isDemo);
+      const policies = repo.getInsurancePolicies(isDemo);
+      const apiKey = store.getSecret(`ai_key:${profile.aiProvider}`);
+
+      const contextBlock = buildPortfolioContextBlock(snapshot, previous, alerts, profile, policies);
+      const completion = await runLLMCompletion({
+        provider: profile.aiProvider,
+        model: profile.aiModel,
+        apiKey,
+        baseUrl: profile.aiBaseUrl || undefined,
+        systemPrompt: buildSystemPrompt(),
+        messages: [
+          {
+            role: 'user',
+            content: buildAdvisorValidationPrompt({
+              topic: payload.topic,
+              advisorName: payload.advisorName,
+              pitchText: trimmedPitch,
+              contextBlock
+            })
+          }
+        ]
+      });
+
+      const topicTitleMap: Record<AdvisorTopic, string> = {
+        holdings: 'Holdings',
+        mutual_funds: 'Mutual Funds',
+        insurance: 'Insurance',
+        tax_loan: 'Tax & Loans',
+        general: 'General'
+      };
+      const sourceSuffix = payload.advisorName?.trim() ? ` · ${payload.advisorName.trim()}` : '';
+      const report = repo.saveAIReport({
+        isDemo,
+        provider: completion.provider,
+        model: completion.model,
+        createdAt: new Date().toISOString(),
+        title: `Advisor Check: ${topicTitleMap[payload.topic] || 'General'}${sourceSuffix} (${snapshot.snapshotDate})`,
+        markdown: completion.text
+      });
+      broadcastState();
+      return report;
+    }
+  );
+
   ipcMain.handle('ai:sendChat', async (_event, userPrompt: string) => {
     const trimmed = userPrompt.trim();
     if (!trimmed) throw new Error('Message cannot be empty.');
@@ -383,6 +487,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     const profile = repo.getProfile();
     const previous = repo.getPreviousSnapshot(isDemo, snapshot.snapshotDate);
     const alerts = repo.getAlerts(isDemo);
+    const policies = repo.getInsurancePolicies(isDemo);
     const apiKey = store.getSecret(`ai_key:${profile.aiProvider}`);
 
     const priorHistory = repo.getChatMessages(isDemo, 16);
@@ -392,7 +497,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       createdAt: new Date().toISOString()
     });
 
-    const contextBlock = buildPortfolioContextBlock(snapshot, previous, alerts, profile);
+    const contextBlock = buildPortfolioContextBlock(snapshot, previous, alerts, profile, policies);
     const systemPrompt = `${buildSystemPrompt()}\n\nCurrent Investor Portfolio Context:\n${contextBlock}`;
 
     try {
@@ -450,7 +555,8 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       picked.filePaths[0],
       snapshot,
       repo.getAlerts(isDemo),
-      repo.getProfile()
+      repo.getProfile(),
+      repo.getInsurancePolicies(isDemo)
     );
     return { canceled: false, ...res };
   });

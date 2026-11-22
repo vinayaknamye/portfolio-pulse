@@ -2,24 +2,34 @@ import React, { useEffect, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
-  BarChart3,
   BookOpen,
   Briefcase,
   LayoutDashboard,
   Loader2,
   Moon,
   RefreshCw,
+  Repeat,
   Settings as SettingsIcon,
   Sparkles,
   Sun
 } from 'lucide-react';
-import { AIProviderId, AppStatePayload, BrokerId, SipBaselineItem, SymbolAlias, UserProfile } from '@shared/types';
+import {
+  AdvisorTopic,
+  AIProviderId,
+  AppStatePayload,
+  BrokerId,
+  CsvImportResult,
+  InsurancePolicy,
+  SipBaselineItem,
+  SymbolAlias,
+  UserProfile
+} from '@shared/types';
 import { Onboarding } from './pages/Onboarding';
 import { Dashboard } from './pages/Dashboard';
 import { Holdings } from './pages/Holdings';
 import { SipsAndAudit } from './pages/SipsAndAudit';
 import { Strategy } from './pages/Strategy';
-import { Insights } from './pages/Insights';
+import { Insights, InsightsSubTab } from './pages/Insights';
 import { Settings } from './pages/Settings';
 import { FloatingChat } from './components/FloatingChat';
 import { formatTimestamp } from './lib/format';
@@ -29,6 +39,8 @@ type NavTab = 'dashboard' | 'holdings' | 'audit' | 'strategy' | 'insights' | 'se
 export default function App() {
   const [state, setState] = useState<AppStatePayload | null>(null);
   const [tab, setTab] = useState<NavTab>('dashboard');
+  const [insightsSubTab, setInsightsSubTab] = useState<InsightsSubTab>('alerts');
+  const [lastCsvImport, setLastCsvImport] = useState<CsvImportResult | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [connectingBroker, setConnectingBroker] = useState<BrokerId | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
@@ -37,7 +49,7 @@ export default function App() {
 
   const showToast = (kind: 'ok' | 'err', text: string) => {
     setToast({ kind, text });
-    setTimeout(() => setToast(null), 4000);
+    setTimeout(() => setToast(null), 4500);
   };
 
   useEffect(() => {
@@ -64,6 +76,8 @@ export default function App() {
     );
   }
 
+  const showOnboarding = !state.latestSnapshot && !state.isDemoMode;
+
   const handleSaveProfile = async (partial: Partial<UserProfile>) => {
     await window.portfolioPulse.saveProfile(partial);
   };
@@ -76,7 +90,6 @@ export default function App() {
         showToast('err', res.error || `Failed to link ${broker}`);
       } else {
         showToast('ok', `${broker === 'indmoney' ? 'INDmoney' : 'Upstox'} connected!`);
-        // If user is already past onboarding (e.g., linking Upstox from Settings), immediately sync live data!
         if (!showOnboarding) {
           void handleSyncNow();
         }
@@ -158,10 +171,21 @@ export default function App() {
       showToast('err', res.error);
       return;
     }
+    setLastCsvImport(res);
     showToast(
       'ok',
-      `Imported ${res.parsedCount} avg costs from ${res.fileName} (${res.matchedInSnapshot} applied to live holdings).`
+      `Imported ${res.parsedCount} avg costs from ${res.fileName} (${res.matchedInSnapshot} matched to live holdings).`
     );
+  };
+
+  const handleSaveInsurancePolicy = async (policy: InsurancePolicy) => {
+    await window.portfolioPulse.saveInsurancePolicy(policy);
+    showToast('ok', `Saved policy: ${policy.insurer} — ${policy.planName}`);
+  };
+
+  const handleDeleteInsurancePolicy = async (id: number) => {
+    await window.portfolioPulse.deleteInsurancePolicy(id);
+    showToast('ok', 'Removed insurance policy.');
   };
 
   const handleSaveApiKey = async (provider: AIProviderId, apiKey: string) => {
@@ -174,6 +198,14 @@ export default function App() {
 
   const handleGenerateReport = async () => {
     await window.portfolioPulse.generateAiReport();
+  };
+
+  const handleValidateAdvisorInput = async (payload: {
+    topic: AdvisorTopic;
+    advisorName?: string;
+    pitchText: string;
+  }) => {
+    return window.portfolioPulse.validateAdvisorInput(payload);
   };
 
   const handleSendChat = async (message: string) => {
@@ -198,11 +230,11 @@ export default function App() {
   const handleWipeAllData = async () => {
     const next = await window.portfolioPulse.wipeAllData();
     setState(next);
+    setLastCsvImport(null);
     setTab('dashboard');
     showToast('ok', 'All local data wiped.');
   };
 
-  const showOnboarding = !state.latestSnapshot && !state.isDemoMode;
   const activeAlertCount = state.alerts.filter((a) => !a.dismissed && a.severity !== 'info').length;
   const needsUpstoxRelink =
     !state.isDemoMode &&
@@ -220,12 +252,25 @@ export default function App() {
     setAiConfigOpen(true);
   };
 
+  const handleNavigate = (
+    nextTab: 'holdings' | 'audit' | 'insights' | 'strategy' | 'settings',
+    opts?: { insightsSubTab?: InsightsSubTab }
+  ) => {
+    if (nextTab === 'insights' && opts?.insightsSubTab) {
+      setInsightsSubTab(opts.insightsSubTab);
+    }
+    setTab(nextTab);
+  };
+
+  const customDisplayName = state.profile.displayName?.trim();
+  const showNameBadge = Boolean(customDisplayName && customDisplayName.toLowerCase() !== 'investor');
+
   const navItems: Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: number }> = [
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
     { id: 'holdings', label: 'Holdings', icon: <Briefcase className="h-4 w-4" /> },
-    { id: 'audit', label: 'SIPs & Audit', icon: <BarChart3 className="h-4 w-4" />, badge: activeAlertCount },
-    { id: 'strategy', label: 'My Strategy', icon: <BookOpen className="h-4 w-4" /> },
-    { id: 'insights', label: 'AI Insights', icon: <Sparkles className="h-4 w-4" /> },
+    { id: 'audit', label: 'SIPs', icon: <Repeat className="h-4 w-4" /> },
+    { id: 'insights', label: 'Insights & Alerts', icon: <Sparkles className="h-4 w-4" />, badge: activeAlertCount },
+    { id: 'strategy', label: 'Strategy & Cover', icon: <BookOpen className="h-4 w-4" /> },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon className="h-4 w-4" /> }
   ];
 
@@ -238,6 +283,11 @@ export default function App() {
             <Activity className="h-3.5 w-3.5" />
           </div>
           <span className="text-sm font-bold tracking-tight">Portfolio Pulse</span>
+          {showNameBadge && !state.isDemoMode && (
+            <span className="hidden rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300 sm:inline">
+              {customDisplayName}
+            </span>
+          )}
           {state.isDemoMode && (
             <span className="app-no-drag rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
               DEMO MODE
@@ -389,11 +439,13 @@ export default function App() {
             )}
 
             {tab === 'dashboard' && (
-              <Dashboard state={state} onNavigate={(next) => setTab(next)} onDismissAlert={handleDismissAlert} />
+              <Dashboard state={state} onNavigate={handleNavigate} onDismissAlert={handleDismissAlert} />
             )}
             {tab === 'holdings' && (
               <Holdings
                 state={state}
+                lastCsvImport={lastCsvImport}
+                onDismissCsvImport={() => setLastCsvImport(null)}
                 onSaveAlias={handleSaveAlias}
                 onDeleteAlias={handleDeleteAlias}
                 onSaveCostOverride={handleSaveCostOverride}
@@ -406,16 +458,27 @@ export default function App() {
                 state={state}
                 onSaveBaselines={handleSaveBaselines}
                 onResetBaselines={handleResetBaselines}
-                onDismissAlert={handleDismissAlert}
+                onOpenAlerts={() => handleNavigate('insights', { insightsSubTab: 'alerts' })}
               />
             )}
-            {tab === 'strategy' && <Strategy state={state} onSaveProfile={handleSaveProfile} />}
+            {tab === 'strategy' && (
+              <Strategy
+                state={state}
+                onSaveProfile={handleSaveProfile}
+                onSaveInsurancePolicy={handleSaveInsurancePolicy}
+                onDeleteInsurancePolicy={handleDeleteInsurancePolicy}
+              />
+            )}
             {tab === 'insights' && (
               <Insights
                 state={state}
+                subTab={insightsSubTab}
+                onSubTabChange={setInsightsSubTab}
+                onDismissAlert={handleDismissAlert}
                 onOpenAiSettings={openAiSettingsInTab}
                 onOpenFloatingChat={() => setChatOpen(true)}
                 onGenerateReport={handleGenerateReport}
+                onValidateAdvisorInput={handleValidateAdvisorInput}
               />
             )}
             {tab === 'settings' && (
