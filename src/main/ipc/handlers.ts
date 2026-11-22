@@ -135,6 +135,12 @@ export function registerIpcHandlers(ctx: IpcContext): void {
 
   ipcMain.handle('broker:connect', async (_event, broker: BrokerId) => {
     try {
+      const currentState = repo.getBrokerStatuses()[broker].state;
+      // Clear stale/broken OAuth tokens when explicitly reconnecting so browser sign-in starts fresh
+      if (currentState !== 'disconnected') {
+        if (broker === 'indmoney') indmoney.disconnect();
+        else upstox.disconnect();
+      }
       if (broker === 'indmoney') {
         await indmoney.connectAndAuthenticate();
       } else {
@@ -719,7 +725,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       const llmAttachments: LLMAttachment[] = extractedFiles.map((f) => ({
         fileName: f.fileName,
         mimeType: f.mimeType,
-        base64: f.isBinaryMedia ? f.base64 : undefined,
+        base64: f.shouldAttachBinaryToLLM ? f.base64 : undefined,
         extractedText: f.extractedText
       }));
 

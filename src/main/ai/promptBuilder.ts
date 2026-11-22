@@ -53,6 +53,23 @@ export function buildPortfolioContextBlock(
           .join('\n')
       : '- None recorded.';
 
+  const fixedDeposits = snapshot.fixedDeposits || [];
+  const fdTotal = snapshot.fixedDepositTotal ?? fixedDeposits.reduce((s, f) => s + f.currentValue, 0);
+  const emergencyFdTotal =
+    snapshot.emergencyFdTotal ??
+    fixedDeposits.filter((f) => f.countsTowardEmergency).reduce((s, f) => s + f.currentValue, 0);
+  const fdRows =
+    fixedDeposits.length > 0
+      ? fixedDeposits
+          .map((f) => {
+            const ratePart = f.interestRate ? ` | ${f.interestRate}% p.a.` : '';
+            const matPart = f.maturityDate ? ` | Matures ${f.maturityDate}` : '';
+            const statusPart = f.countsTowardEmergency ? 'Emergency-Eligible' : 'Tax-Saver / Locked (Excluded)';
+            return `- ${f.name} [${f.bank}]: Current ${formatLakh(f.currentValue)} (Principal ${formatLakh(f.investedValue)}, +${formatLakh(f.interestEarned)})${ratePart}${matPart} · ${statusPart}`;
+          })
+          .join('\n')
+      : '- None recorded.';
+
   const mfRows = snapshot.mutualFunds
     .map(
       (m) =>
@@ -98,14 +115,18 @@ ${upstoxLines}- Total Net Worth: ₹${snapshot.totalNetworth.toLocaleString('en-
 - Unrealized Gain: ${snapshot.totalUnrealizedGain >= 0 ? '+' : ''}₹${snapshot.totalUnrealizedGain.toLocaleString('en-IN')} (${snapshot.totalUnrealizedGainPct >= 0 ? '+' : ''}${snapshot.totalUnrealizedGainPct.toFixed(2)}%)
 - Total Liabilities: ₹${snapshot.totalLiabilities.toLocaleString('en-IN')}
 - ${deltaLine}
-- Emergency Cushion (Arbitrage + SA): ${formatLakh(snapshot.emergencyCushionTotal)} vs Target ${formatLakh(profile.emergencyTarget)}
+- Emergency Cushion (Savings Account + Callable FDs + Arbitrage MFs): ${formatLakh(snapshot.emergencyCushionTotal)} vs Target ${formatLakh(profile.emergencyTarget)}
 - Savings Account Balance: ₹${snapshot.savingsAccountBalance.toLocaleString('en-IN')}
-- Liquid MF Corpus (STP Source): ${formatLakh(snapshot.liquidCorpusTotal)}
+- Fixed Deposits Total: ${formatLakh(fdTotal)} (Emergency-Eligible FDs: ${formatLakh(emergencyFdTotal)})
+- Liquid MF Corpus (STP / Near-Cash Pool): ${formatLakh(snapshot.liquidCorpusTotal)}
 - Monthly Income (User Configured): ₹${profile.monthlyIncome.toLocaleString('en-IN')}
 - Active SIP Outflow: ₹${snapshot.weeklySipOutflow.toLocaleString('en-IN')}/wk + ₹${snapshot.monthlySipOutflow.toLocaleString('en-IN')}/mo (~${formatLakh(snapshot.estimatedMonthlySipTotal)}/mo)
 
 ### Asset Allocation
 ${allocRows}
+
+### Fixed Deposits & Emergency-Linked Assets
+${fdRows}
 
 ### Top Direct Equities (up to 25 by value)
 ${topEquities || '- None'}

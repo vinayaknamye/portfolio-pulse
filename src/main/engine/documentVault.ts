@@ -4,15 +4,20 @@ import { extractText } from 'unpdf';
 
 export const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024; // 15 MB per file
 const MAX_TEXT_CHARS = 60_000;
+const MAX_FOCUSED_PDF_CHARS = 24_000;
+const MAX_INLINE_PDF_PAGES = 8;
+const MAX_INLINE_PDF_BYTES = 1.5 * 1024 * 1024;
 
 export interface ExtractedFilePayload {
   filePath: string;
   fileName: string;
   mimeType: string;
   sizeBytes: number;
+  pageCount?: number;
   base64: string;
   extractedText: string;
-  isBinaryMedia: boolean; // PDF or Image suitable for native multimodal input
+  isBinaryMedia: boolean; // PDF or Image
+  shouldAttachBinaryToLLM: boolean; // True for images, scanned PDFs, or short PDFs; false for 35–100p text-selectable PDFs so LLMs get focused pages cleanly
 }
 
 const EXT_TO_MIME: Record<string, string> = {
@@ -41,16 +46,92 @@ export function isTextLikeMime(mime: string): boolean {
   return mime.startsWith('text/') || mime === 'application/json';
 }
 
-export async function extractPdfTextFromBuffer(buf: Buffer): Promise<string> {
-  try {
-    const result = await extractText(new Uint8Array(buf), { mergePages: true });
-    const rawText: string | string[] = result.text;
-    const raw = Array.isArray(rawText) ? rawText.join('\n') : String(rawText || '');
-    return raw.replace(/\u0000/g, '').trim().slice(0, MAX_TEXT_CHARS);
-  } catch {
-    // Scanned, encrypted, or malformed PDF — caller still gets base64 bytes for multimodal LLMs
-    return '';
+const HIGH_SIGNAL_PAGE_PATTERNS: Array<{ re: RegExp; weight: number }> = [
+  { re: /\bpolicy\s+schedule\b/i, weight: 8 },
+  { re: /\bcertificate\s+of\s+insurance\b|\binsurance\s+certificate\b/i, weight: 8 },
+  { re: /\bcustomer\s+information\s+sheet\b/i, weight: 7 },
+  { re: /\bpremium\s+receipt\b|\bpayment\s+receipt\b|\backnowledge\s+the\s+receipt\b/i, weight: 7 },
+  { re: /\bbenefit\s+illustration\b|\bsummary\s+of\s+benefits\b/i, weight: 6 },
+  { re: /\bsum\s+assured\b|\bsum\s+insured\b/i, weight: 5 },
+  { re: /\bannuali[sz]ed?\s+premium\b|\bgross\s+premium\b|\btotal\s+premium\b|\bpremium\s+details\b/i, weight: 5 },
+  { re: /\bpolicy\s+expiry\s+date\b|\bmaturity\s+date\b|\bpremium\s+due\s+date\b|\brenewal\s+date\b/i, weight: 4 },
+  { re: /\bpremium\s+pay(?:ing|ment)\s+term\b|\bpolicy\s+term\b/i, weight: 4 },
+  { re: /\bexpense\s+ratio\b|\bexit\s+load\b|\bsurrender\s+value\b|\birr\b/i, weight: 3 }
+];
+
+const BOILERPLATE_PENALTY_RE = /\b(part\s+[b-g]\b.*definitions|general\s+terms\s+(&|and)\s+conditions|standard\s+exclusions|grievance\s+redressal|ombudsman\s+office)\b/i;
+
+/**
+ * Selects the highest-signal pages from multi-page PDFs (e.g. 35–100 page Indian insurance policy kits)
+ * so Policy Schedule, Premium Receipt, and Customer Information Sheet pages are always captured
+ * without overflowing LLM token limits on 80 pages of boilerplate legal T&Cs.
+ */
+export function buildFocusedPdfText(pages: string[], maxChars = MAX_FOCUSED_PDF_CHARS): string {
+  const cleanedPages = pages.map((p) => (p || '').replace(/\u0000/g, '').trim());
+  const totalLen = cleanedPages.reduce((sum, p) => sum + p.length, 0);
+
+  if (cleanedPages.length <= 8 && totalLen <= maxChars) {
+    return cleanedPages
+      .map((text, i) => (text ? `--- Page ${i + 1} ---\n${text}` : ''))
+      .filter(Boolean)
+      .join('\n\n')
+      .slice(0, maxChars);
   }
+
+  const scored = cleanedPages.map((text, idx) => {
+    let score = idx < 8 ? 14 - idx : 0; // Strong bias toward front Policy Schedule / Premium Receipt pages (Pages 1–8)
+    for (const { re, weight } of HIGH_SIGNAL_PAGE_PATTERNS) {
+      if (re.test(text)) score += weight;
+    }
+    if (BOILERPLATE_PENALTY_RE.test(text.slice(0, 700))) {
+      score -= 10;
+    }
+    return { idx, text, score };
+  });
+
+  // Always include Pages 1–7 (cover letter + policy schedule + premium schedule + receipt) when within budget
+  const selectedIndices = new Set<number>();
+  let budget = 0;
+  for (let i = 0; i < Math.min(7, cleanedPages.length); i += 1) {
+    if (cleanedPages[i].length === 0) continue;
+    if (i >= 4 && BOILERPLATE_PENALTY_RE.test(cleanedPages[i].slice(0, 700))) continue;
+    if (budget + cleanedPages[i].length > maxChars && selectedIndices.size >= 4) break;
+    selectedIndices.add(i);
+    budget += cleanedPages[i].length + 28;
+  }
+
+  const ranked = [...scored]
+    .filter((p) => p.text.length > 0 && !selectedIndices.has(p.idx) && p.score > 2)
+    .sort((a, b) => b.score - a.score || a.idx - b.idx);
+
+  for (const item of ranked) {
+    if (selectedIndices.size >= 11) break;
+    if (budget + item.text.length > maxChars) continue;
+    selectedIndices.add(item.idx);
+    budget += item.text.length + 28;
+  }
+
+  const ordered = Array.from(selectedIndices).sort((a, b) => a - b);
+  return ordered
+    .map((i) => `--- Page ${i + 1} of ${cleanedPages.length} ---\n${cleanedPages[i]}`)
+    .join('\n\n')
+    .slice(0, maxChars);
+}
+
+export async function extractPdfPagesFromBuffer(buf: Buffer): Promise<{ pages: string[]; totalPages: number }> {
+  try {
+    const result = await extractText(new Uint8Array(buf), { mergePages: false });
+    const pages = Array.isArray(result.text) ? result.text : [String(result.text || '')];
+    return { pages, totalPages: result.totalPages || pages.length };
+  } catch {
+    return { pages: [], totalPages: 0 };
+  }
+}
+
+export async function extractPdfTextFromBuffer(buf: Buffer): Promise<string> {
+  const { pages } = await extractPdfPagesFromBuffer(buf);
+  if (pages.length === 0) return '';
+  return buildFocusedPdfText(pages, MAX_FOCUSED_PDF_CHARS);
 }
 
 export async function extractFileContent(filePath: string): Promise<ExtractedFilePayload> {
@@ -73,17 +154,25 @@ export async function extractFileContent(filePath: string): Promise<ExtractedFil
   const base64 = buf.toString('base64');
 
   let extractedText = '';
+  let pageCount: number | undefined;
   let isBinaryMedia = false;
+  let shouldAttachBinaryToLLM = false;
 
   if (mimeType === 'application/pdf') {
     isBinaryMedia = true;
-    extractedText = await extractPdfTextFromBuffer(buf);
+    const { pages, totalPages } = await extractPdfPagesFromBuffer(buf);
+    pageCount = totalPages;
+    extractedText = pages.length > 0 ? buildFocusedPdfText(pages, MAX_FOCUSED_PDF_CHARS) : '';
+    const isScannedPdf = extractedText.trim().length < 250;
+    const isShortPdf = totalPages > 0 && totalPages <= MAX_INLINE_PDF_PAGES && stat.size <= MAX_INLINE_PDF_BYTES;
+    // Send raw PDF binary ONLY for scanned PDFs or short PDFs; for 35–100p text-selectable PDFs send focused schedule pages!
+    shouldAttachBinaryToLLM = isScannedPdf || isShortPdf;
   } else if (isImageMime(mimeType)) {
     isBinaryMedia = true;
+    shouldAttachBinaryToLLM = true;
   } else if (isTextLikeMime(mimeType)) {
     extractedText = buf.toString('utf-8').slice(0, MAX_TEXT_CHARS);
   } else {
-    // Best-effort UTF-8 preview for unknown extensions
     extractedText = buf.toString('utf-8').replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\uFFFF]/g, '').slice(0, 12_000);
   }
 
@@ -92,9 +181,11 @@ export async function extractFileContent(filePath: string): Promise<ExtractedFil
     fileName,
     mimeType,
     sizeBytes: stat.size,
+    pageCount,
     base64,
     extractedText,
-    isBinaryMedia
+    isBinaryMedia,
+    shouldAttachBinaryToLLM
   };
 }
 
@@ -107,10 +198,6 @@ export function getVaultRoot(userDataDir: string): string {
   return path.join(userDataDir, 'vault');
 }
 
-/**
- * Copies an insurance policy or renewal document into the app's local vault so moving/deleting
- * the source file on the user's computer never breaks in-app viewing.
- */
 export function copyInsuranceDocToVault(
   userDataDir: string,
   policyId: number,

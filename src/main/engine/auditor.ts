@@ -162,11 +162,19 @@ export function runPortfolioAudit(input: AuditInput): AuditAlert[] {
   // 7. Emergency Cushion Check
   if (profile.emergencyTarget > 0 && current.emergencyCushionTotal < profile.emergencyTarget) {
     const gap = profile.emergencyTarget - current.emergencyCushionTotal;
+    const parts: string[] = [];
+    if (current.savingsAccountBalance > 0) parts.push(`SA ${formatInrCompact(current.savingsAccountBalance)}`);
+    if ((current.emergencyFdTotal ?? 0) > 0) parts.push(`FDs ${formatInrCompact(current.emergencyFdTotal ?? 0)}`);
+    const arbTotal =
+      current.arbitrageTotal ??
+      current.mutualFunds.filter((m) => m.isArbitrage).reduce((s, m) => s + m.currentValue, 0);
+    if (arbTotal > 0) parts.push(`Arbitrage ${formatInrCompact(arbTotal)}`);
+    const breakdown = parts.length > 0 ? ` (${parts.join(' + ')})` : '';
     push(
       'emergency',
       'warning',
       `Emergency cushion below target by ${formatInrCompact(gap)}`,
-      `Current Arbitrage + Savings Account buffer is ${formatInrCompact(current.emergencyCushionTotal)} vs your ${formatInrCompact(profile.emergencyTarget)} goal.`
+      `Current Emergency Cushion${breakdown} is ${formatInrCompact(current.emergencyCushionTotal)} vs your ${formatInrCompact(profile.emergencyTarget)} goal (Savings Account + Callable FDs + Arbitrage MFs).`
     );
   }
 

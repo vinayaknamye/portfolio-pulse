@@ -110,7 +110,25 @@ export class SyncOrchestrator {
         let upstoxError: string | null = null;
         if (shouldAttemptUpstox) {
           try {
-            upstoxPayload = await upstox.fetchPortfolio({ interactive: options.interactive });
+            const fetchedUpstox = await upstox.fetchPortfolio({ interactive: options.interactive });
+            const indHasUpstoxStocks = Boolean(
+              indPayload?.stocks?.some((s) => {
+                const b = (s.broker || '').toLowerCase();
+                return b.includes('upstox') || b.includes('rksv');
+              })
+            );
+            const hasPriorLiveBasis = repo.getLastLiveUpstoxCostBasis(false).length > 0;
+
+            // Safety guard: never overwrite existing Upstox avg prices if Upstox unexpectedly returns 0 holdings
+            // while INDmoney still reports Upstox equities (e.g. stale token or post-upgrade Keychain reset).
+            if (fetchedUpstox.holdings.length === 0 && indHasUpstoxStocks && hasPriorLiveBasis) {
+              throw new ReauthRequiredError(
+                'upstox',
+                'Upstox returned 0 holdings while INDmoney still shows Upstox equities. Reconnect Upstox to refresh live avg prices.'
+              );
+            }
+
+            upstoxPayload = fetchedUpstox;
             upstoxState = 'live';
             repo.setBrokerStatus({
               broker: 'upstox',

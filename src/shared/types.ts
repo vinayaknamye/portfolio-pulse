@@ -219,11 +219,59 @@ export interface RawIndmoneyBond {
   assetclass_l2?: string | null;
 }
 
+export interface RawIndmoneyFd {
+  investment?: string;
+  name?: string;
+  fd_name?: string;
+  title?: string;
+  investment_code?: string;
+  broker?: string | null;
+  bank?: string | null;
+  bank_name?: string | null;
+  issuer?: string | null;
+  institution?: string | null;
+  invested_amount?: number | string | null;
+  principal?: number | string | null;
+  principal_amount?: number | string | null;
+  invested_value?: number | string | null;
+  market_value?: number | string | null;
+  current_value?: number | string | null;
+  maturity_amount?: number | string | null;
+  maturity_value?: number | string | null;
+  total_pnl?: number | string | null;
+  pnl_per?: number | string | null;
+  interest_rate?: number | string | null;
+  rate_of_interest?: number | string | null;
+  roi?: number | string | null;
+  maturity_date?: string | null;
+  start_date?: string | null;
+  tenure?: string | null;
+  category?: string | null;
+  sub_type?: string | null;
+  assetclass_l2?: string | null;
+  is_tax_saver?: boolean | null;
+}
+
+export interface RawIndmoneySavingsAccount {
+  investment?: string;
+  name?: string;
+  bank?: string | null;
+  bank_name?: string | null;
+  broker?: string | null;
+  investment_code?: string;
+  account_number?: string | null;
+  market_value?: number | string | null;
+  current_value?: number | string | null;
+  balance?: number | string | null;
+}
+
 export interface IndmoneyFetchPayload {
   networth: RawIndmoneyNetworth;
   stocks: RawIndmoneyStock[];
   mutualFunds: RawIndmoneyMF[];
   bonds?: RawIndmoneyBond[];
+  fixedDeposits?: RawIndmoneyFd[];
+  savingsAccounts?: RawIndmoneySavingsAccount[];
   mfSips: RawIndmoneySipItem[];
   stockSips: RawIndmoneyStockSipItem[];
 }
@@ -297,6 +345,31 @@ export interface ReconciledBond {
     | 'manual_override'
     | 'csv_import'
     | 'market_value_proxy';
+}
+
+export interface ReconciledFixedDeposit {
+  id: string;
+  name: string;
+  bank: string;
+  investedValue: number;
+  currentValue: number;
+  interestEarned: number;
+  returnPct: number;
+  interestRate?: number;
+  maturityDate?: string;
+  maturityValue?: number;
+  tenure?: string;
+  isTaxSaver: boolean;
+  countsTowardEmergency: boolean;
+  source: 'indmoney_holding' | 'indmoney_aggregate';
+}
+
+export interface ReconciledSavingsAccount {
+  id: string;
+  name: string;
+  bank: string;
+  balance: number;
+  source: 'indmoney_holding' | 'indmoney_aggregate';
 }
 
 export type InsuranceCategory = 'Term Life' | 'Health' | 'Endowment / Guaranteed' | 'ULIP' | 'Vehicle / Other';
@@ -496,6 +569,9 @@ export interface PortfolioSnapshot {
   totalLiabilities: number;
   upstoxAvailableMargin: number;
   savingsAccountBalance: number;
+  fixedDepositTotal?: number;
+  emergencyFdTotal?: number;
+  arbitrageTotal?: number;
   emergencyCushionTotal: number;
   liquidCorpusTotal: number;
   weeklySipOutflow: number;
@@ -504,6 +580,8 @@ export interface PortfolioSnapshot {
   allocations: AssetAllocationItem[];
   equities: ReconciledEquity[];
   bonds?: ReconciledBond[];
+  fixedDeposits?: ReconciledFixedDeposit[];
+  savingsAccounts?: ReconciledSavingsAccount[];
   mutualFunds: ReconciledMutualFund[];
   activeSips: ActiveSipRecord[];
   reconciliation: ReconciliationSummary;

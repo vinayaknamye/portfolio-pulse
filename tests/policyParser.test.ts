@@ -4,6 +4,7 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { parseInsuranceTextHeuristics } from '@main/engine/policyParser';
 import {
+  buildFocusedPdfText,
   copyInsuranceDocToVault,
   deleteVaultFile,
   extractPdfTextFromBuffer,
@@ -74,6 +75,93 @@ describe('parseInsuranceTextHeuristics (Offline Indian Insurance Policy Parser)'
     expect(parsedUlip.insurer).toBe('ICICI Prudential');
     expect(parsedUlip.category).toBe('ULIP');
     expect(parsedUlip.annualPremium).toBe(200000);
+  });
+
+  it('handles multi-line Axis Max Life, Rupee-backtick HDFC Life, Unlimited Niva Bupa 3-year health, and focused PDF page selection', () => {
+    const axisText = `
+      POLICY SCHEDULE
+      Policy: Axis Max Life Smart Term Plan Plus Type of Policy: Individual Pure Risk Life Insurance Plan
+      Policy No.: 998877665
+      Policy Term (in years) 26
+      Premium Payment Term (in years)
+      10
+      Due Date when Premium is payable
+      15th of May every year
+      Maturity Date 15-May-2052
+      Base Sum Assured (as chosen by Policyholder as on the Date of Commencement of Risk)
+      1,00,00,000.00
+      Annualised Premium 25,663.00
+    `;
+    const pAxis = parseInsuranceTextHeuristics(axisText);
+    expect(pAxis.insurer).toBe('Axis Max Life');
+    expect(pAxis.category).toBe('Term Life');
+    expect(pAxis.planName).toBe('Axis Max Life Smart Term Plan Plus');
+    expect(pAxis.sumAssured).toBe(10000000);
+    expect(pAxis.annualPremium).toBe(25663);
+    expect(pAxis.renewalDate).toBe('15th May');
+    expect(pAxis.paymentTerm).toContain('PPT 10 Yrs');
+    expect(pAxis.paymentTerm).toContain('Term 26 Yrs');
+    expect(pAxis.notes).toContain('998877665');
+
+    const hdfcSavingsText = `
+      POLICY DOCUMENT- HDFC Life Sanchay Plus
+      POLICY SCHEDULE
+      Policy number: 30001122
+      Plan Option Guaranteed Maturity
+      Premium Due Date(s) 4th May
+      Sum Assured
+      Guaranteed Sum Assured on Maturity
+      Sum Assured on Death
+      Guaranteed Additions As mentioned in Part C Clause 1. (3)
+      Annualized Premium
+      \` 6,231,500.00
+      \` 4,635,000.00
+      \` 500,000.00
+      Maturity Date 04/05/2041
+      Premium per Frequency of Premium Payment \` 500,000.00
+      Frequency of Premium Payment Annual
+      Policy Term 15 years
+      Premium Paying Term 9 years
+    `;
+    const pHdfc = parseInsuranceTextHeuristics(hdfcSavingsText);
+    expect(pHdfc.insurer).toBe('HDFC Life');
+    expect(pHdfc.category).toBe('Endowment / Guaranteed');
+    expect(pHdfc.planName).toBe('HDFC Life Sanchay Plus');
+    expect(pHdfc.sumAssured).toBe(6231500);
+    expect(pHdfc.annualPremium).toBe(500000);
+    expect(pHdfc.renewalDate).toBe('4th May');
+
+    const nivaText = `
+      Niva Bupa Health Insurance Co. Ltd.
+      Product Name: ReAssure 3.0, Product UIN: NBHHLIP26047V012526
+      Policy Number: 62001122334455
+      Base Sum Insured Unlimited
+      Policy Commencement Date# 25-MAY-2026
+      Policy Expiry Date 24-MAY-2029
+      Gross Premium 67,731
+    `;
+    const pNiva = parseInsuranceTextHeuristics(nivaText);
+    expect(pNiva.insurer).toBe('Niva Bupa');
+    expect(pNiva.category).toBe('Health');
+    expect(pNiva.planName).toBe('ReAssure 3.0');
+    expect(pNiva.sumAssured).toBe(0);
+    expect(pNiva.annualPremium).toBe(22577);
+    expect(pNiva.renewalDate).toBe('24-MAY-2029');
+    expect(pNiva.paymentTerm).toBe('3 Years');
+    expect(pNiva.notes).toContain('Unlimited Base Sum Insured');
+
+    // Focused PDF extractor keeps schedule/receipt pages and skips 50 pages of Part B legal definitions
+    const fakePages = Array.from({ length: 50 }, (_, i) =>
+      i === 3
+        ? 'POLICY SCHEDULE Sum Assured 1,00,00,000 Annualised Premium 25,000'
+        : i === 6
+        ? 'Premium Receipt Gross Premium 25,000 Policy Expiry Date 10-Aug-2027'
+        : `PART B DEFINITIONS General Terms and Conditions Standard Exclusions boilerplate ${'x'.repeat(2000)}`
+    );
+    const focused = buildFocusedPdfText(fakePages, 12000);
+    expect(focused).toContain('POLICY SCHEDULE');
+    expect(focused).toContain('Premium Receipt');
+    expect(focused.length).toBeLessThanOrEqual(12000);
   });
 });
 

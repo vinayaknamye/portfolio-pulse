@@ -5,11 +5,15 @@ import {
   IndmoneyFetchPayload,
   PortfolioSnapshot,
   RawIndmoneyBond,
+  RawIndmoneyFd,
+  RawIndmoneySavingsAccount,
   RawIndmoneyStock,
   RawUpstoxHolding,
   ReconciledBond,
   ReconciledEquity,
+  ReconciledFixedDeposit,
   ReconciledMutualFund,
+  ReconciledSavingsAccount,
   ReconciliationSummary,
   SymbolAlias,
   UnmatchedCandidate,
@@ -488,29 +492,100 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
   const unmatchedIndmoney: UnmatchedCandidate[] = [];
 
   const registerBond = (bond: ReconciledBond) => {
-    const isinKey = bond.isin ? `isin:${bond.isin.toUpperCase()}` : '';
-    const nameKey = `name:${normalizeCompact(bond.name)}`;
-    if ((isinKey && seenBondKeys.has(isinKey)) || seenBondKeys.has(nameKey)) {
-      // If Upstox live data arrives for a bond already added from INDmoney without real cost basis, upgrade its cost basis
-      if (bond.costBasisSource === 'upstox_live') {
-        const existingIdx = bonds.findIndex(
-          (b) => (isinKey && b.isin.toUpperCase() === bond.isin.toUpperCase()) || normalizeCompact(b.name) === normalizeCompact(bond.name)
-        );
-        if (existingIdx !== -1 && bonds[existingIdx].costBasisSource === 'market_value_proxy') {
-          bonds[existingIdx] = {
-            ...bonds[existingIdx],
-            averagePrice: bond.averagePrice,
-            investedValue: bond.investedValue,
-            pnl: bond.pnl,
-            pnlPct: bond.pnlPct,
-            costBasisSource: 'upstox_live'
-          };
-        }
+    const incomingIsin = (bond.isin || '').trim().toUpperCase();
+    const incomingSym = (bond.symbol || '').trim().toUpperCase();
+    const incomingNameNorm = normalizeCompact(bond.name);
+    const incomingNameLower = bond.name.trim().toLowerCase();
+    const incomingAliasSym = aliasMap.get(incomingNameLower);
+
+    const findMatchingBondIndex = (): number => {
+      // 1. Exact ISIN
+      if (incomingIsin) {
+        const byIsin = bonds.findIndex((b) => b.isin && b.isin.trim().toUpperCase() === incomingIsin);
+        if (byIsin !== -1) return byIsin;
       }
+      // 2. Explicit user-defined Symbol Alias (either INDmoney name -> Upstox symbol or reverse)
+      const byAlias = bonds.findIndex((b) => {
+        const existingSym = (b.symbol || '').trim().toUpperCase();
+        const existingAliasSym = aliasMap.get(b.name.trim().toLowerCase());
+        return (
+          (existingAliasSym && incomingSym && existingAliasSym === incomingSym) ||
+          (incomingAliasSym && existingSym && incomingAliasSym === existingSym)
+        );
+      });
+      if (byAlias !== -1) return byAlias;
+
+      // 3. Exact normalized compact name
+      if (incomingNameNorm) {
+        const byName = bonds.findIndex((b) => normalizeCompact(b.name) === incomingNameNorm);
+        if (byName !== -1) return byName;
+      }
+
+      // 4. Cross-broker automatic Bond/NCD/SGB dedup: same bondType + exact qty + LTP within 1.5%
+      const crossBrokerCandidates: number[] = [];
+      bonds.forEach((b, idx) => {
+        if (brokersMatch(b.broker, bond.broker)) return;
+        if (b.bondType !== bond.bondType) return;
+        if (Math.abs(b.quantity - bond.quantity) >= 0.01) return;
+        if (!isPriceNear(b.lastPrice, bond.lastPrice, 0.015, 1)) return;
+        crossBrokerCandidates.push(idx);
+      });
+      if (crossBrokerCandidates.length === 1) {
+        return crossBrokerCandidates[0];
+      }
+      if (crossBrokerCandidates.length > 1) {
+        // Tie-break by lexical similarity (e.g. shared coupon/series like "10.75" / "SR XI")
+        let bestIdx = -1;
+        let bestSim = 0;
+        for (const idx of crossBrokerCandidates) {
+          const sim = tokenSimilarity(bonds[idx].name, bond.name);
+          if (sim > bestSim) {
+            bestSim = sim;
+            bestIdx = idx;
+          }
+        }
+        if (bestIdx !== -1 && bestSim > 0) return bestIdx;
+      }
+
+      return -1;
+    };
+
+    const existingIdx = findMatchingBondIndex();
+    if (existingIdx !== -1) {
+      const existing = bonds[existingIdx];
+      const useUpstoxCost =
+        bond.costBasisSource === 'upstox_live' &&
+        (existing.costBasisSource === 'market_value_proxy' || existing.costBasisSource === 'indmoney_native');
+      const richerName = bond.name.length > existing.name.length ? bond.name : existing.name;
+      const realSymbol =
+        bond.costBasisSource === 'upstox_live' && bond.symbol
+          ? bond.symbol
+          : existing.symbol || bond.symbol;
+      const realIsin = incomingIsin || existing.isin;
+
+      bonds[existingIdx] = {
+        ...existing,
+        name: richerName,
+        symbol: realSymbol,
+        isin: realIsin,
+        broker: bond.costBasisSource === 'upstox_live' ? 'Upstox' : existing.broker,
+        ...(useUpstoxCost
+          ? {
+              averagePrice: bond.averagePrice,
+              investedValue: bond.investedValue,
+              pnl: bond.pnl,
+              pnlPct: bond.pnlPct,
+              costBasisSource: 'upstox_live' as const
+            }
+          : {})
+      };
+      if (realIsin) seenBondKeys.add(`isin:${realIsin}`);
+      seenBondKeys.add(`name:${normalizeCompact(richerName)}`);
       return;
     }
-    if (isinKey) seenBondKeys.add(isinKey);
-    seenBondKeys.add(nameKey);
+
+    if (incomingIsin) seenBondKeys.add(`isin:${incomingIsin}`);
+    if (incomingNameNorm) seenBondKeys.add(`name:${incomingNameNorm}`);
     bonds.push(bond);
   };
 
@@ -1160,10 +1235,122 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
   const totalUnrealizedGainPct =
     totalInvestedAdjusted > 0 ? (totalUnrealizedGain / totalInvestedAdjusted) * 100 : 0;
 
-  const savingsAccountBalance = allocations.find((a) => a.assetType === 'SA')?.currentValue ?? 0;
+  // Fixed Deposits (itemized via INDmoney networth_holdings, with aggregate fallback from networth_snapshot)
+  const fixedDeposits: ReconciledFixedDeposit[] = [];
+  for (const [idx, raw] of (indmoney?.fixedDeposits || ([] as RawIndmoneyFd[])).entries()) {
+    const rawCur = parseNumericValue(raw.market_value ?? raw.current_value);
+    const rawInv = parseNumericValue(raw.invested_amount ?? raw.principal_amount ?? raw.principal ?? raw.invested_value);
+    const currentValue = rawCur ?? rawInv ?? 0;
+    const investedValue = rawInv && rawInv > 0 ? rawInv : currentValue;
+    if (currentValue <= 0 && investedValue <= 0) continue;
+
+    const rawName = (raw.investment || raw.fd_name || raw.name || raw.title || '').trim();
+    const explicitBank = (raw.bank_name || raw.bank || raw.issuer || raw.institution || raw.broker || '').trim();
+    const bank = explicitBank || inferBankFromName(rawName) || 'INDmoney Linked Bank';
+    const name = rawName || `${bank} Fixed Deposit`;
+
+    const rawPnl = parseNumericValue(raw.total_pnl);
+    const interestEarned = rawPnl !== undefined ? rawPnl : currentValue - investedValue;
+    const rawPnlPct = parseNumericValue(raw.pnl_per);
+    const returnPct =
+      rawPnlPct !== undefined ? rawPnlPct : investedValue > 0 ? (interestEarned / investedValue) * 100 : 0;
+
+    let interestRate = parseNumericValue(raw.interest_rate ?? raw.rate_of_interest ?? raw.roi);
+    if (interestRate === undefined) {
+      const rateMatch = name.match(/\b(\d{1,2}(?:\.\d{1,2})?)\s*%/);
+      if (rateMatch) {
+        const parsedRate = Number(rateMatch[1]);
+        if (parsedRate >= 2 && parsedRate <= 16) interestRate = parsedRate;
+      }
+    }
+
+    const maturityDate = (raw.maturity_date || '').trim() || undefined;
+    const maturityValue = parseNumericValue(raw.maturity_amount ?? raw.maturity_value);
+    const tenure = (raw.tenure || '').trim() || undefined;
+    const isTaxSaver = isTaxSaverFd(raw, name);
+
+    fixedDeposits.push({
+      id: `fd:ind:${(raw.investment_code || `${bank}-${idx + 1}`).toLowerCase()}`,
+      name,
+      bank,
+      investedValue: round2(investedValue),
+      currentValue: round2(currentValue),
+      interestEarned: round2(interestEarned),
+      returnPct: round2(returnPct),
+      interestRate: interestRate !== undefined ? round2(interestRate) : undefined,
+      maturityDate,
+      maturityValue: maturityValue !== undefined ? round2(maturityValue) : undefined,
+      tenure,
+      isTaxSaver,
+      countsTowardEmergency: !isTaxSaver,
+      source: 'indmoney_holding'
+    });
+  }
+
+  if (fixedDeposits.length === 0) {
+    const fdAllocs = allocations.filter((a) => isFdAssetType(a.assetType) && a.currentValue > 0);
+    if (fdAllocs.length > 0) {
+      const aggCurrent = fdAllocs.reduce((s, a) => s + a.currentValue, 0);
+      const aggInvestedRaw = fdAllocs.reduce((s, a) => s + a.investedValue, 0);
+      const aggInvested = aggInvestedRaw > 0 ? aggInvestedRaw : aggCurrent;
+      const aggInterest = aggCurrent - aggInvested;
+      const aggReturnPct = aggInvested > 0 ? (aggInterest / aggInvested) * 100 : 0;
+      fixedDeposits.push({
+        id: 'fd:indmoney:aggregate',
+        name: 'Fixed Deposits (INDmoney Linked)',
+        bank: 'INDmoney Linked Bank',
+        investedValue: round2(aggInvested),
+        currentValue: round2(aggCurrent),
+        interestEarned: round2(aggInterest),
+        returnPct: round2(aggReturnPct),
+        isTaxSaver: false,
+        countsTowardEmergency: true,
+        source: 'indmoney_aggregate'
+      });
+    }
+  }
+  fixedDeposits.sort((a, b) => b.currentValue - a.currentValue);
+
+  // Savings Accounts (itemized if INDmoney exposes them, else aggregate from networth_snapshot)
+  const savingsAccounts: ReconciledSavingsAccount[] = [];
+  for (const [idx, raw] of (indmoney?.savingsAccounts || ([] as RawIndmoneySavingsAccount[])).entries()) {
+    const balance = parseNumericValue(raw.market_value ?? raw.current_value ?? raw.balance) ?? 0;
+    if (balance <= 0) continue;
+    const rawName = (raw.investment || raw.name || '').trim();
+    const explicitBank = (raw.bank_name || raw.bank || raw.broker || '').trim();
+    const bank = explicitBank || inferBankFromName(rawName) || 'Linked Bank';
+    const name = rawName || `${bank} Savings Account`;
+    savingsAccounts.push({
+      id: `sa:ind:${(raw.investment_code || raw.account_number || `${bank}-${idx + 1}`).toLowerCase()}`,
+      name,
+      bank,
+      balance: round2(balance),
+      source: 'indmoney_holding'
+    });
+  }
+
+  const saAllocTotal = allocations.filter((a) => isSaAssetType(a.assetType)).reduce((s, a) => s + a.currentValue, 0);
+  const savingsAccountBalance =
+    saAllocTotal > 0 ? saAllocTotal : savingsAccounts.reduce((s, a) => s + a.balance, 0);
+
+  if (savingsAccounts.length === 0 && savingsAccountBalance > 0) {
+    savingsAccounts.push({
+      id: 'sa:indmoney:aggregate',
+      name: 'Savings Accounts (INDmoney Linked)',
+      bank: 'Linked Bank Account',
+      balance: round2(savingsAccountBalance),
+      source: 'indmoney_aggregate'
+    });
+  }
+  savingsAccounts.sort((a, b) => b.balance - a.balance);
+
+  const fixedDepositTotal = fixedDeposits.reduce((s, f) => s + f.currentValue, 0);
+  const emergencyFdTotal = fixedDeposits
+    .filter((f) => f.countsTowardEmergency)
+    .reduce((s, f) => s + f.currentValue, 0);
   const arbitrageTotal = mutualFunds.filter((m) => m.isArbitrage).reduce((s, m) => s + m.currentValue, 0);
   const liquidCorpusTotal = mutualFunds.filter((m) => m.isLiquid).reduce((s, m) => s + m.currentValue, 0);
-  const emergencyCushionTotal = arbitrageTotal + savingsAccountBalance;
+  const emergencyCushionTotal = arbitrageTotal + savingsAccountBalance + emergencyFdTotal;
 
   const matchedCount = equities.filter((e) => e.matchStatus === 'matched').length;
   const externalCount = equities.filter(
@@ -1188,6 +1375,9 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
     totalLiabilities: round2(totalLiabilities),
     upstoxAvailableMargin: round2(upstoxMargin),
     savingsAccountBalance: round2(savingsAccountBalance),
+    fixedDepositTotal: round2(fixedDepositTotal),
+    emergencyFdTotal: round2(emergencyFdTotal),
+    arbitrageTotal: round2(arbitrageTotal),
     emergencyCushionTotal: round2(emergencyCushionTotal),
     liquidCorpusTotal: round2(liquidCorpusTotal),
     weeklySipOutflow: round2(weeklySipOutflow),
@@ -1196,6 +1386,8 @@ export function reconcilePortfolio(input: ReconcileInput): PortfolioSnapshot {
     allocations,
     equities,
     bonds,
+    fixedDeposits,
+    savingsAccounts,
     mutualFunds,
     activeSips,
     reconciliation: {
@@ -1457,12 +1649,59 @@ export function applyCostOverridesToSnapshot(
         if (exactPriceQty.length === 1) {
           matchMap.set(idx, exactPriceQty[0]);
           matchedOverrideKeys.add(exactPriceQty[0].holdingKey);
+          return;
+        }
+
+        // SGB tranche LTP match (e.g. "2.5% SGB 27-Jun-2031" <-> "Sovereign Gold Bond Scheme 2023-24 - Series I")
+        const isSgbItem = /\bSGB\b|SOVEREIGN\s+GOLD/i.test(item.name);
+        if (isSgbItem) {
+          const sgbByLtp = candidates.filter(
+            (ov) =>
+              /\bSGB\b|SOVEREIGN\s+GOLD/i.test(ov.displayName) &&
+              isPriceNear(ov.csvCurrentPrice, item.lastPrice, 0.015, 25)
+          );
+          if (sgbByLtp.length === 1) {
+            matchMap.set(idx, sgbByLtp[0]);
+            matchedOverrideKeys.add(sgbByLtp[0].holdingKey);
+          }
         }
       });
     };
 
     tryPass2ForList(snapshot.equities, equityMatches, (e) => e.isNonEquity);
     tryPass2ForList(currentBonds, bondMatches);
+
+    // Mark any remaining CSV overrides that clearly correspond to a holding already covered by a manual override
+    // so they are not falsely reported as "unmatched" in the CSV import banner (manual override stays untouched).
+    const allHoldingsForManualCheck: MatchableHolding[] = [...snapshot.equities.filter((e) => !e.isNonEquity), ...currentBonds];
+    for (const ov of unclaimedCsv) {
+      if (matchedOverrideKeys.has(ov.holdingKey)) continue;
+      const isSgbOv = /\bSGB\b|SOVEREIGN\s+GOLD/i.test(ov.displayName);
+      const coveredByManual = allHoldingsForManualCheck.some((h) => {
+        if (h.costBasisSource !== 'manual_override' && !overrides.some((m) => m.source === 'manual' && m.holdingKey === `id:${h.id.toLowerCase()}`)) {
+          return false;
+        }
+        if (scoreOverrideLexicalMatch(h, ov) >= 1.5) return true;
+        if (
+          ov.csvQty !== undefined &&
+          Math.abs(ov.csvQty - h.quantity) < 0.01 &&
+          isPriceNear(ov.csvCurrentPrice, h.lastPrice, 0.015, 0.75)
+        ) {
+          return true;
+        }
+        if (
+          isSgbOv &&
+          /\bSGB\b|SOVEREIGN\s+GOLD/i.test(h.name) &&
+          isPriceNear(ov.csvCurrentPrice, h.lastPrice, 0.015, 25)
+        ) {
+          return true;
+        }
+        return false;
+      });
+      if (coveredByManual) {
+        matchedOverrideKeys.add(ov.holdingKey);
+      }
+    }
   }
 
   let matchedCount = 0;
@@ -1614,6 +1853,66 @@ function pushMatchedHolding(
     indmoneyValue: round2(indVal),
     upstoxValue: round2(up.currentValue)
   });
+}
+
+function parseNumericValue(val: unknown): number | undefined {
+  if (typeof val === 'number') return Number.isFinite(val) ? val : undefined;
+  if (typeof val === 'string') {
+    const cleaned = val.replace(/[₹,%]/g, '').replace(/\s+/g, '').trim();
+    if (!cleaned) return undefined;
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+function isFdAssetType(assetType: string): boolean {
+  return /^(FD|FDS|FIXED_DEPOSIT|FIXED_DEPOSITS|BANK_FD)$/i.test((assetType || '').trim());
+}
+
+function isSaAssetType(assetType: string): boolean {
+  return /^(SA|SAVINGS|SAVINGS_ACCOUNT|SAVINGS_ACCOUNTS|BANK_ACCOUNT)$/i.test((assetType || '').trim());
+}
+
+function isTaxSaverFd(raw: RawIndmoneyFd, displayName: string): boolean {
+  if (raw.is_tax_saver === true) return true;
+  const text = `${displayName} ${raw.category || ''} ${raw.sub_type || ''} ${raw.assetclass_l2 || ''} ${raw.tenure || ''}`;
+  return /\b(tax[\s-]?sav(?:er|ing)|80\s*c|non[\s-]?callable|lock[\s-]?in)\b/i.test(text);
+}
+
+const KNOWN_FD_BANKS: Array<[RegExp, string]> = [
+  [/\bhdfc\b/i, 'HDFC Bank'],
+  [/\bicici\b/i, 'ICICI Bank'],
+  [/\bstate\s+bank\b|\bsbi\b/i, 'SBI'],
+  [/\baxis\b/i, 'Axis Bank'],
+  [/\bkotak\b/i, 'Kotak Mahindra Bank'],
+  [/\bidfc\b/i, 'IDFC FIRST Bank'],
+  [/\bindusind\b/i, 'IndusInd Bank'],
+  [/\byes\s+bank\b/i, 'YES Bank'],
+  [/\bfederal\b/i, 'Federal Bank'],
+  [/\bau\s+small\b/i, 'AU Small Finance Bank'],
+  [/\bequitas\b/i, 'Equitas Small Finance Bank'],
+  [/\bunity\s+small\b/i, 'Unity Small Finance Bank'],
+  [/\bsuryoday\b/i, 'Suryoday Small Finance Bank'],
+  [/\butkarsh\b/i, 'Utkarsh Small Finance Bank'],
+  [/\bujjivan\b/i, 'Ujjivan Small Finance Bank'],
+  [/\brbl\b/i, 'RBL Bank'],
+  [/\bbandhan\b/i, 'Bandhan Bank'],
+  [/\bbank\s+of\s+baroda\b|\bbob\b/i, 'Bank of Baroda'],
+  [/\bpunjab\s+national\b|\bpnb\s+housing\b/i, 'PNB'],
+  [/\bcanara\b/i, 'Canara Bank'],
+  [/\bunion\s+bank\b/i, 'Union Bank'],
+  [/\bbajaj\s+fin/i, 'Bajaj Finance'],
+  [/\bshriram\b/i, 'Shriram Finance'],
+  [/\bmahindra\s+fin/i, 'Mahindra Finance'],
+  [/\bsbm\s+bank\b/i, 'SBM Bank']
+];
+
+function inferBankFromName(name: string): string | null {
+  for (const [re, label] of KNOWN_FD_BANKS) {
+    if (re.test(name)) return label;
+  }
+  return null;
 }
 
 function round2(n: number): number {

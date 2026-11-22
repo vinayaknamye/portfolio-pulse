@@ -27,7 +27,7 @@ import {
 } from '@shared/types';
 import { Onboarding } from './pages/Onboarding';
 import { Dashboard } from './pages/Dashboard';
-import { Holdings } from './pages/Holdings';
+import { Holdings, HoldingsSubTab } from './pages/Holdings';
 import { SipsAndAudit } from './pages/SipsAndAudit';
 import { Strategy } from './pages/Strategy';
 import { Insights, InsightsSubTab } from './pages/Insights';
@@ -40,6 +40,7 @@ type NavTab = 'dashboard' | 'holdings' | 'audit' | 'strategy' | 'insights' | 'se
 export default function App() {
   const [state, setState] = useState<AppStatePayload | null>(null);
   const [tab, setTab] = useState<NavTab>('dashboard');
+  const [holdingsSubTab, setHoldingsSubTab] = useState<HoldingsSubTab>('equities');
   const [insightsSubTab, setInsightsSubTab] = useState<InsightsSubTab>('alerts');
   const [lastCsvImport, setLastCsvImport] = useState<CsvImportResult | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -297,10 +298,13 @@ export default function App() {
 
   const handleNavigate = (
     nextTab: 'holdings' | 'audit' | 'insights' | 'strategy' | 'settings',
-    opts?: { insightsSubTab?: InsightsSubTab }
+    opts?: { insightsSubTab?: InsightsSubTab; holdingsSubTab?: HoldingsSubTab }
   ) => {
     if (nextTab === 'insights' && opts?.insightsSubTab) {
       setInsightsSubTab(opts.insightsSubTab);
+    }
+    if (nextTab === 'holdings' && opts?.holdingsSubTab) {
+      setHoldingsSubTab(opts.holdingsSubTab);
     }
     setTab(nextTab);
   };
@@ -487,6 +491,8 @@ export default function App() {
             {tab === 'holdings' && (
               <Holdings
                 state={state}
+                subTab={holdingsSubTab}
+                onSubTabChange={setHoldingsSubTab}
                 lastCsvImport={lastCsvImport}
                 onDismissCsvImport={() => setLastCsvImport(null)}
                 onSaveAlias={handleSaveAlias}

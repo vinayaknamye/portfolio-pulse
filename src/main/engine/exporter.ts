@@ -36,9 +36,18 @@ export function generatePortfolioMarkdown(
   lines.push(`| **Total Net Worth** | **${formatCr(snapshot.totalNetworth)}** (₹${snapshot.totalNetworth.toLocaleString('en-IN', { maximumFractionDigits: 2 })}) |`);
   lines.push(`| **Adjusted Invested** | ${formatCr(snapshot.totalInvestedAdjusted)} |`);
   lines.push(`| **Unrealized Gain** | ${snapshot.totalUnrealizedGain >= 0 ? '+' : ''}${formatLakh(snapshot.totalUnrealizedGain)} (${snapshot.totalUnrealizedGainPct >= 0 ? '+' : ''}${snapshot.totalUnrealizedGainPct.toFixed(2)}%) |`);
+  const fixedDeposits = snapshot.fixedDeposits || [];
+  const fdTotal = snapshot.fixedDepositTotal ?? fixedDeposits.reduce((s, f) => s + f.currentValue, 0);
+  const emergencyFdTotal =
+    snapshot.emergencyFdTotal ??
+    fixedDeposits.filter((f) => f.countsTowardEmergency).reduce((s, f) => s + f.currentValue, 0);
   lines.push(`| **Total Liabilities** | ₹${snapshot.totalLiabilities.toLocaleString('en-IN')} |`);
-  lines.push(`| **Emergency Cushion (Arbitrage + SA)** | ${formatLakh(snapshot.emergencyCushionTotal)} (Target: ${formatLakh(profile.emergencyTarget)}) |`);
-  lines.push(`| **Liquid Fund Corpus** | ${formatLakh(snapshot.liquidCorpusTotal)} |`);
+  lines.push(`| **Emergency Cushion (SA + Callable FDs + Arbitrage)** | ${formatLakh(snapshot.emergencyCushionTotal)} (Target: ${formatLakh(profile.emergencyTarget)}) |`);
+  if (fdTotal > 0) {
+    lines.push(`| **Fixed Deposits** | ${formatLakh(fdTotal)} (Emergency-Eligible: ${formatLakh(emergencyFdTotal)}) |`);
+  }
+  lines.push(`| **Savings Account Cash** | ₹${snapshot.savingsAccountBalance.toLocaleString('en-IN', { maximumFractionDigits: 2 })} |`);
+  lines.push(`| **Liquid Fund Corpus (STP / Near-Cash)** | ${formatLakh(snapshot.liquidCorpusTotal)} |`);
   if (snapshot.upstoxState !== 'not_linked') {
     lines.push(`| **Upstox Available Margin** | ₹${snapshot.upstoxAvailableMargin.toLocaleString('en-IN', { maximumFractionDigits: 2 })} |`);
   }
@@ -53,6 +62,18 @@ export function generatePortfolioMarkdown(
     );
   }
   lines.push('');
+  if (fixedDeposits.length > 0) {
+    lines.push('### Fixed Deposits');
+    lines.push('');
+    lines.push('| Deposit | Bank | Principal | Current | Interest | Rate | Maturity | Emergency |');
+    lines.push('|---|---|---:|---:|---:|---:|---|---|');
+    for (const f of fixedDeposits) {
+      lines.push(
+        `| ${f.name} | ${f.bank} | ${formatLakh(f.investedValue)} | ${formatLakh(f.currentValue)} | ${formatLakh(f.interestEarned)} | ${f.interestRate ? `${f.interestRate}%` : '—'} | ${f.maturityDate || '—'} | ${f.countsTowardEmergency ? 'Eligible' : 'Locked / Excluded'} |`
+      );
+    }
+    lines.push('');
+  }
   lines.push('---');
   lines.push('');
   lines.push(`## 2. Direct Equities (${snapshot.equities.length})`);

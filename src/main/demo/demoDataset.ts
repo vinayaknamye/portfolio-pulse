@@ -224,10 +224,12 @@ export function buildDemoPayloads(dayOffsetFromToday = 0): {
   const ppfInv = 350000;
   const goldVal = 310000;
   const goldInv = 185000;
+  const fdVal = 157450;
+  const fdInv = 150000;
   const saVal = 48500; // Slightly tight ahead of ₹35k weekly/monthly SIP cycle to demonstrate alert
 
-  const totalCurrent = Math.round((stockTotal + mfTotal + ppfVal + goldVal + saVal) * 100) / 100;
-  const totalRawInvested = Math.round((stockTotal + mfInvested + ppfInv + goldInv + saVal) * 100) / 100;
+  const totalCurrent = Math.round((stockTotal + mfTotal + ppfVal + goldVal + fdVal + saVal) * 100) / 100;
+  const totalRawInvested = Math.round((stockTotal + mfInvested + ppfInv + goldInv + fdInv + saVal) * 100) / 100;
 
   const indmoney: IndmoneyFetchPayload = {
     networth: {
@@ -268,6 +270,14 @@ export function buildDemoPayloads(dayOffsetFromToday = 0): {
           progress_value_percentage: (goldVal / totalCurrent) * 100
         },
         {
+          asset_type: 'FD',
+          invested_value: fdInv,
+          current_value: fdVal,
+          return: fdVal - fdInv,
+          return_percentage: ((fdVal - fdInv) / fdInv) * 100,
+          progress_value_percentage: (fdVal / totalCurrent) * 100
+        },
+        {
           asset_type: 'SA',
           invested_value: saVal,
           current_value: saVal,
@@ -280,6 +290,20 @@ export function buildDemoPayloads(dayOffsetFromToday = 0): {
     },
     stocks: indStocks,
     mutualFunds: mfHoldings,
+    fixedDeposits: [
+      {
+        investment: 'HDFC Bank Fixed Deposit (7.10%)',
+        investment_code: 'DEMO_FD1',
+        bank_name: 'HDFC Bank',
+        invested_amount: fdInv,
+        market_value: fdVal,
+        total_pnl: fdVal - fdInv,
+        pnl_per: Math.round(((fdVal - fdInv) / fdInv) * 10000) / 100,
+        interest_rate: 7.1,
+        maturity_date: '15-Sep-2027',
+        tenure: '2 Years'
+      }
+    ],
     bonds: [
       {
         investment: '2.5% SGB 27-Jun-2031',
