@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchUpstoxPayloadFromClient } from '@main/mcp/upstoxAdapter';
+import { fetchUpstoxPayloadFromClient } from '@main/mcp/upstoxClient';
 import { ReauthRequiredError } from '@main/mcp/types';
 
 describe('UpstoxAdapter (fetchUpstoxPayloadFromClient)', () => {
