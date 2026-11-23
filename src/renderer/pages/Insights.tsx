@@ -109,6 +109,10 @@ export const Insights: React.FC<InsightsProps> = ({
   }, [state.reports, selectedReportId]);
 
   const preset = AI_PROVIDER_PRESETS[state.profile.aiProvider];
+  const providerDisplayLabel =
+    state.profile.aiProvider === 'local_cli'
+      ? `Local AI CLI (${state.profile.aiCliTool || 'agy'})`
+      : preset.label;
   const isConfigured = !preset.requiresKey || state.hasAiApiKey[state.profile.aiProvider];
   const activeReport = state.reports.find((r) => r.id === selectedReportId) || state.reports[0] || null;
 
@@ -227,7 +231,7 @@ export const Insights: React.FC<InsightsProps> = ({
             className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-surface-900 dark:text-slate-200 dark:hover:bg-slate-800"
           >
             <Settings2 className="h-3.5 w-3.5" />
-            {preset.label} · {state.profile.aiModel}
+            {providerDisplayLabel} · {state.profile.aiModel}
           </button>
           <button
             type="button"

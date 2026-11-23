@@ -1,6 +1,6 @@
 # Portfolio Pulse
 
-A **local-first, open-source Electron desktop app** for Indian retail investors that connects directly to **INDmoney MCP** and **Upstox MCP** via OAuth, tracks daily portfolio snapshots in local SQLite, runs deterministic multi-broker reconciliation & SIP/cashflow audits with native OS notifications, and offers optional **BYOK AI Portfolio Reviews & Floating Q&A Chat** (Anthropic Claude, Google Gemini, OpenAI/compatible, or offline Ollama).
+A **local-first, open-source Electron desktop app** for Indian retail investors that connects directly to **INDmoney MCP** and **Upstox MCP** via OAuth, tracks daily portfolio snapshots in local SQLite, runs deterministic multi-broker reconciliation & SIP/cashflow audits with native OS notifications, and offers optional **BYOK AI Portfolio Reviews & Floating Q&A Chat** (Anthropic Claude, Google Gemini, OpenAI/compatible, offline Ollama, or Local AI CLI terminal sessions).
 
 > **Disclaimer:** Portfolio Pulse is a local analytics, reconciliation, and rule-based audit tool. It is **not** a SEBI-registered Investment Adviser (IA). Deterministic alerts and optional BYOK AI outputs are for informational and educational purposes only.
 
@@ -26,7 +26,7 @@ A **local-first, open-source Electron desktop app** for Indian retail investors 
   - Menu-bar / system tray resident scheduler (default **21:30 local time**, after NSE close and AMFI NAV publishing) with wake-from-sleep catch-up.
 - **Strategy Templates, Insurance Document Vault & BYOK AI:**
   - Preview-by-default Markdown **Strategy & Goals** with built-in Indian investor **Strategy Templates** plus a local **Insurance Policies & Document Vault** (Term Life, Health, Endowment, ULIP, Vehicle/Other) — upload policy PDFs/images to **auto-parse details** (via AI or offline Indian insurance heuristics), **preview PDFs/images right inside the app**, and archive yearly **renewal receipts** with 1-click renewal date/premium updates.
-  - Configure **Anthropic Claude**, **Google Gemini**, **OpenAI / OpenAI-compatible**, or **Local Ollama** under **Settings → AI Insights Configuration** with step-by-step API key setup guides and automatic **live model discovery**.
+  - Configure **Anthropic Claude**, **Google Gemini**, **OpenAI / OpenAI-compatible**, **Local Ollama**, or **Local AI CLI (Terminal Session)** (`agy`, `gemini`, `codex`, `claude`) under **Settings → AI Insights Configuration** with step-by-step setup guides, auto-detected local CLIs, and automatic **live model discovery**.
   - Open the **floating Ask AI Q&A chat** from any screen in the app.
 - **Demo Mode & Data Portability:**
   - Evaluate the entire app risk-free via **Try Demo Portfolio First** (synthetic 14-day Indian portfolio), and export snapshots anytime as a Markdown + JSON bundle.

@@ -454,11 +454,21 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
                   <span>
-                    <strong>Upstox session expired:</strong> INDmoney synced cleanly and your last Upstox cost basis was carried forward. Re-link Upstox to refresh live margin &amp; demat holdings.
+                    {state.brokers.upstox.state === 'error' && state.brokers.upstox.lastError ? (
+                      <>
+                        <strong>Upstox sync issue:</strong> {state.brokers.upstox.lastError} (INDmoney synced cleanly
+                        and prior Upstox cost basis was carried forward.)
+                      </>
+                    ) : (
+                      <>
+                        <strong>Upstox session expired:</strong> INDmoney synced cleanly and your last Upstox cost basis
+                        was carried forward. Re-link Upstox to refresh live margin &amp; demat holdings.
+                      </>
+                    )}
                   </span>
                 </div>
                 <button
-                  onClick={() => void handleConnectBroker('upstox').then(() => handleSyncNow())}
+                  onClick={() => void handleConnectBroker('upstox')}
                   disabled={connectingBroker !== null || syncing}
                   className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-amber-400"
                 >

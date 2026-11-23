@@ -25,6 +25,8 @@ export const DEFAULT_USER_PROFILE = {
   aiProvider: 'claude' as const,
   aiModel: 'claude-sonnet-4-20250514',
   aiBaseUrl: '',
+  aiCliTool: 'agy' as const,
+  aiCliBinaryPath: '',
   theme: 'dark' as const,
   strategyMarkdown: `# My Portfolio Strategy & Goals
 
@@ -73,14 +75,69 @@ export const AI_PROVIDER_PRESETS = {
     requiresKey: false,
     defaultBaseUrl: 'http://127.0.0.1:11434',
     keyUrl: ''
+  },
+  local_cli: {
+    label: 'Local AI CLI (Terminal Session)',
+    defaultModel: 'default',
+    models: ['default'],
+    requiresKey: false,
+    defaultBaseUrl: '',
+    keyUrl: ''
   }
 } as const;
+
+export const LOCAL_CLI_PRESETS: Record<
+  'agy' | 'gemini' | 'codex' | 'claude',
+  {
+    label: string;
+    command: string;
+    loginHint: string;
+    models: Array<{ id: string; displayName: string }>;
+    note?: string;
+  }
+> = {
+  agy: {
+    label: 'Antigravity CLI (agy)',
+    command: 'agy',
+    loginHint: 'Run "agy" in Terminal and complete sign-in once.',
+    models: [{ id: 'default', displayName: 'CLI Default (Recommended)' }]
+  },
+  gemini: {
+    label: 'Google Gemini CLI (gemini)',
+    command: 'gemini',
+    loginHint: 'Run "gemini" in Terminal and sign in with your Google account once.',
+    models: [
+      { id: 'default', displayName: 'CLI Default (Recommended)' },
+      { id: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
+      { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+      { id: 'gemini-2.5-flash-lite', displayName: 'Gemini 2.5 Flash-Lite' }
+    ]
+  },
+  codex: {
+    label: 'OpenAI Codex CLI (codex)',
+    command: 'codex',
+    loginHint: 'Run "codex login" in Terminal to sign in with your ChatGPT account.',
+    models: [{ id: 'default', displayName: 'CLI Default (Recommended)' }]
+  },
+  claude: {
+    label: 'Anthropic Claude CLI (claude)',
+    command: 'claude',
+    loginHint: 'Run "claude" in Terminal to verify your CLI authentication.',
+    models: [
+      { id: 'default', displayName: 'CLI Default (Recommended)' },
+      { id: 'sonnet', displayName: 'Claude Sonnet (alias)' },
+      { id: 'opus', displayName: 'Claude Opus (alias)' },
+      { id: 'haiku', displayName: 'Claude Haiku (alias)' }
+    ],
+    note: 'Anthropic encourages API keys for third-party integrations; use the unmodified local CLI strictly within your provider terms.'
+  }
+};
 
 export const NON_ADVISORY_DISCLAIMER =
   'Portfolio Pulse is a local-first analytics, multi-broker reconciliation, and rule-based audit tool. It is NOT a SEBI-registered Investment Adviser (IA). Deterministic alerts and optional BYOK AI insights are for informational and educational purposes only—always verify decisions independently or consult a SEBI-registered adviser.';
 
 export const AI_KEY_GUIDELINES: Record<
-  'claude' | 'gemini' | 'openai' | 'ollama',
+  'claude' | 'gemini' | 'openai' | 'ollama' | 'local_cli',
   { title: string; steps: string[]; tip: string }
 > = {
   gemini: {
@@ -90,7 +147,7 @@ export const AI_KEY_GUIDELINES: Record<
       'Click "Create API key" and select or create a Google Cloud project.',
       'Copy the key starting with "AIza..." and paste it into the API Key box above.'
     ],
-    tip: 'Tip: On the free tier, choose a fast Flash model (e.g. gemini-3.8-flash or gemini-2.5-flash) rather than Pro models which often have 0 free-tier quota.'
+    tip: 'Tip: On the free tier, choose a fast Flash / Flash-Lite model (Pro models often have 0 free-tier quota). If you hit AI Studio rate limits, switch Provider to "Local AI CLI (Terminal Session)" to use your signed-in agy or gemini terminal session instead.'
   },
   claude: {
     title: 'How to get an Anthropic Claude API Key',
@@ -118,6 +175,15 @@ export const AI_KEY_GUIDELINES: Record<
       'Keep Ollama running in the background and click Refresh to detect your local models.'
     ],
     tip: 'Tip: Zero API cost and zero portfolio data ever leaves your computer.'
+  },
+  local_cli: {
+    title: 'How to use a Local AI CLI Session (No API Key Needed)',
+    steps: [
+      'Install and sign into your preferred official CLI in Terminal once (e.g. "agy", "gemini", "codex login", or "claude").',
+      'Select that CLI in "2. Local CLI Tool" above — Portfolio Pulse auto-detects installed binaries even when launched from Applications.',
+      'Keep Model on "CLI Default (Recommended)" or pick a specific model, then click Save AI Settings.'
+    ],
+    tip: 'Tip: Prompts are piped privately via stdin inside an isolated empty temp directory with agent tools restricted. For scanned PDFs/images without selectable text, a cloud API provider with vision support still gives the best OCR.'
   }
 };
 

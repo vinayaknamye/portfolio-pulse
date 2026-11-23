@@ -115,12 +115,13 @@ Runs locally on every sync with zero LLM cost and generates categorized alerts (
 
 ## 6. BYOK AI System (`src/main/ai/`)
 
-- **Supported Providers (`providers.ts`):**
+- **Supported Providers (`providers.ts`, `localCli.ts`):**
   - `claude` (Anthropic Messages API, native PDF + image blocks)
-  - `gemini` (Google Generative Language API, native `inlineData` PDF + image)
+  - `gemini` (Google Generative Language API, native `inlineData` PDF + image, automatic retry for transient `429` bursts and clear `limit: 0` guidance)
   - `openai` (OpenAI / OpenRouter / Groq / LM Studio chat completions, image `image_url` + extracted PDF/text context)
   - `ollama` (Local `http://127.0.0.1:11434`, offline)
-- **Live Model Discovery:** `listModels()` queries each provider's live model endpoint and falls back to curated presets in `AI_PROVIDER_PRESETS`.
+  - `local_cli` (**Local AI CLI — Terminal Session**): Spawns the user's unmodified locally authenticated CLI (`agy`, `gemini`, `codex`, or `claude`) in an isolated empty temp directory with tools restricted and full portfolio context piped privately over `stdin` (augmented `PATH` resolves Homebrew, `~/.local/bin`, nvm, fnm, Volta, etc. even in Finder-launched `.app` bundles).
+- **Live Model Discovery:** `listModels()` queries each provider's live model endpoint (or `agy models` / curated defaults for `local_cli`) and falls back to curated presets in `AI_PROVIDER_PRESETS` / `LOCAL_CLI_PRESETS`.
 - **Prompt Context (`promptBuilder.ts`):** `buildPortfolioContextBlock()` serializes net worth, allocations, Fixed Deposits & Emergency Cushion breakdown, top 25 direct equities, Bonds & SGBs, Mutual Funds, active SIPs, tracked Insurance Policies, deterministic alerts, and the user's `strategyMarkdown`.
 - **Surfaces:**
   1. **Portfolio Health & Strategy Review** (`Insights → AI Reviews`)
@@ -151,7 +152,7 @@ Runs locally on every sync with zero LLM cost and generates categorized alerts (
 - **Brokers & Sync:** `broker:connect`, `broker:disconnect`, `sync:run`, `alert:dismiss`, `notification:test`
 - **SIPs, Aliases & Cost Overrides:** `sip:saveBaselines`, `sip:resetBaselinesFromLive`, `alias:save`, `alias:delete`, `costOverride:save`, `costOverride:delete`, `costOverride:importCsv`
 - **Insurance Vault:** `insurance:save`, `insurance:delete`, `insurance:pickAndParseDoc`, `insurance:uploadDocument`, `insurance:readDocument`, `insurance:openDocumentExternal`, `insurance:deleteDocument`
-- **AI & Export:** `advisor:pickAttachments`, `ai:saveApiKey`, `ai:clearApiKey`, `ai:listModels`, `ai:generateReport`, `ai:validateAdvisorInput`, `ai:sendChat`, `ai:clearChat`, `export:bundle`
+- **AI & Export:** `advisor:pickAttachments`, `ai:saveApiKey`, `ai:clearApiKey`, `ai:detectLocalClis`, `ai:listModels`, `ai:generateReport`, `ai:validateAdvisorInput`, `ai:sendChat`, `ai:clearChat`, `export:bundle`
 
 ---
 
@@ -161,3 +162,4 @@ Runs locally on every sync with zero LLM cost and generates categorized alerts (
 - **`v0.2.0` (PR #1):** Broker-agnostic Dashboard health card, dedicated Bonds & SGBs tab, Paytm Money Web CSV + LTP/Qty matching, human-readable scrip names in alerts, separated SIPs vs. Insights & Alerts, Strategy preview-by-default + 4 templates, Insurance Policies tracker, Advisor Check AI validator, and API key setup guides.
 - **`v0.3.0` (PR #2):** Advisor Check multimodal file attachments (PDF/images/CSV/text), local Insurance Document Vault with dual-layer AI + `unpdf` auto-parsing, in-app `DocumentViewerModal`, yearly renewal docs with 1-click renewal updates, and Node 26 LTS upgrade (`.nvmrc`).
 - **`v0.3.1` (PR #3):** INDmoney Fixed Deposit & Savings Account fetching with `Holdings → Emergency & FDs` tab and callable-FD inclusion in Emergency Cushion (excluding locked 80C Tax-Saver FDs); cross-broker NCD deduplication & SGB tranche LTP CSV matching; Upstox avg-price & MCP error resilience across unsigned updates; focused multi-page PDF page selection & upgraded Indian insurance heuristics.
+- **`v0.4.0`:** Added Local AI CLI provider (`local_cli`) supporting signed-in `agy`, `gemini`, `codex`, and `claude` terminal sessions with auto-detection, augmented PATH discovery, isolated temp cwd, and private stdin execution; added Gemini API `429` transient retry and `limit: 0` guidance; added Upstox EOD margin-lockout graceful fallback (`get-funds-margin`), accurate banner error display, and OAuth reconnect fixes.

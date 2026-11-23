@@ -12,6 +12,7 @@ import {
   InsuranceDocument,
   InsuranceDocumentType,
   InsurancePolicy,
+  LocalCliToolId,
   ParsedPolicySuggestion,
   SipBaselineItem,
   SymbolAlias,
@@ -31,6 +32,7 @@ import {
   buildSystemPrompt
 } from '@main/ai/promptBuilder';
 import { listProviderModels, LLMAttachment, runLLMCompletion } from '@main/ai/providers';
+import { detectLocalCliTools } from '@main/ai/localCli';
 import { exportPortfolioBundle } from '@main/engine/exporter';
 import { applyCostOverridesToSnapshot } from '@main/engine/reconciler';
 import { inferBrokerFromFilename, parseBrokerHoldingsCsv } from '@main/engine/csvCostParser';
@@ -67,15 +69,16 @@ export function buildAppState(ctx: IpcContext): AppStatePayload {
     ensureDemoSeeded(repo, profile);
   }
 
-  const providers: AIProviderId[] = ['claude', 'gemini', 'openai', 'ollama'];
+  const providers: AIProviderId[] = ['claude', 'gemini', 'openai', 'ollama', 'local_cli'];
   const hasAiApiKey: Record<AIProviderId, boolean> = {
     claude: false,
     gemini: false,
     openai: false,
-    ollama: true
+    ollama: true,
+    local_cli: true
   };
   for (const p of providers) {
-    if (p !== 'ollama') {
+    if (p !== 'ollama' && p !== 'local_cli') {
       hasAiApiKey[p] = store.hasSecret(`ai_key:${p}`);
     }
   }
@@ -135,12 +138,9 @@ export function registerIpcHandlers(ctx: IpcContext): void {
 
   ipcMain.handle('broker:connect', async (_event, broker: BrokerId) => {
     try {
-      const currentState = repo.getBrokerStatuses()[broker].state;
-      // Clear stale/broken OAuth tokens when explicitly reconnecting so browser sign-in starts fresh
-      if (currentState !== 'disconnected') {
-        if (broker === 'indmoney') indmoney.disconnect();
-        else upstox.disconnect();
-      }
+      // Always clear any stale OAuth tokens/client registration when explicitly connecting so browser sign-in starts fresh
+      if (broker === 'indmoney') indmoney.disconnect();
+      else upstox.disconnect();
       if (broker === 'indmoney') {
         await indmoney.connectAndAuthenticate();
       } else {
@@ -427,7 +427,9 @@ export function registerIpcHandlers(ctx: IpcContext): void {
             provider: profile.aiProvider,
             model: profile.aiModel,
             apiKey,
-            baseUrl: profile.aiBaseUrl || undefined
+            baseUrl: profile.aiBaseUrl || undefined,
+            cliTool: profile.aiCliTool,
+            cliBinaryPath: profile.aiCliBinaryPath || undefined
           }
         });
 
@@ -506,7 +508,9 @@ export function registerIpcHandlers(ctx: IpcContext): void {
               provider: profile.aiProvider,
               model: profile.aiModel,
               apiKey,
-              baseUrl: profile.aiBaseUrl || undefined
+              baseUrl: profile.aiBaseUrl || undefined,
+              cliTool: profile.aiCliTool,
+              cliBinaryPath: profile.aiCliBinaryPath || undefined
             }
           });
           parsedSuggestion = {
@@ -650,15 +654,28 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     return true;
   });
 
+  ipcMain.handle('ai:detectLocalClis', () => detectLocalCliTools());
+
   ipcMain.handle(
     'ai:listModels',
-    async (_event, payload: { provider: AIProviderId; apiKeyOverride?: string; baseUrl?: string }) => {
+    async (
+      _event,
+      payload: {
+        provider: AIProviderId;
+        apiKeyOverride?: string;
+        baseUrl?: string;
+        cliTool?: LocalCliToolId;
+        cliBinaryPath?: string;
+      }
+    ) => {
       const storedKey = store.getSecret(`ai_key:${payload.provider}`);
       const apiKey = payload.apiKeyOverride?.trim() || storedKey;
       return listProviderModels({
         provider: payload.provider,
         apiKey,
-        baseUrl: payload.baseUrl
+        baseUrl: payload.baseUrl,
+        cliTool: payload.cliTool,
+        cliBinaryPath: payload.cliBinaryPath
       });
     }
   );
@@ -682,6 +699,8 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       model: profile.aiModel,
       apiKey,
       baseUrl: profile.aiBaseUrl || undefined,
+      cliTool: profile.aiCliTool,
+      cliBinaryPath: profile.aiCliBinaryPath || undefined,
       systemPrompt: buildSystemPrompt(),
       messages: [{ role: 'user', content: buildReviewPrompt(contextBlock) }]
     });
@@ -741,6 +760,8 @@ export function registerIpcHandlers(ctx: IpcContext): void {
         model: profile.aiModel,
         apiKey,
         baseUrl: profile.aiBaseUrl || undefined,
+        cliTool: profile.aiCliTool,
+        cliBinaryPath: profile.aiCliBinaryPath || undefined,
         systemPrompt: buildSystemPrompt(),
         maxTokens: 3200,
         messages: [
@@ -815,6 +836,8 @@ export function registerIpcHandlers(ctx: IpcContext): void {
         model: profile.aiModel,
         apiKey,
         baseUrl: profile.aiBaseUrl || undefined,
+        cliTool: profile.aiCliTool,
+        cliBinaryPath: profile.aiCliBinaryPath || undefined,
         systemPrompt,
         messages: [
           ...priorHistory.map((m) => ({ role: m.role, content: m.content })),

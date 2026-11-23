@@ -13,6 +13,8 @@ import {
   InsuranceDocument,
   InsuranceDocumentType,
   InsurancePolicy,
+  LocalCliDetectionInfo,
+  LocalCliToolId,
   ParsedPolicySuggestion,
   SipBaselineItem,
   SymbolAlias,
@@ -65,10 +67,13 @@ export interface PortfolioPulseApi {
   pickAdvisorAttachments: () => Promise<{ canceled: boolean; files: AdvisorAttachment[]; error?: string }>;
   saveAiApiKey: (provider: AIProviderId, apiKey: string) => Promise<boolean>;
   clearAiApiKey: (provider: AIProviderId) => Promise<boolean>;
+  detectLocalClis: () => Promise<LocalCliDetectionInfo[]>;
   listAiModels: (payload: {
     provider: AIProviderId;
     apiKeyOverride?: string;
     baseUrl?: string;
+    cliTool?: LocalCliToolId;
+    cliBinaryPath?: string;
   }) => Promise<Array<{ id: string; displayName: string }>>;
   generateAiReport: () => Promise<AIReportRecord>;
   validateAdvisorInput: (payload: {
@@ -111,6 +116,7 @@ const api: PortfolioPulseApi = {
   pickAdvisorAttachments: () => ipcRenderer.invoke('advisor:pickAttachments'),
   saveAiApiKey: (provider, apiKey) => ipcRenderer.invoke('ai:saveApiKey', { provider, apiKey }),
   clearAiApiKey: (provider) => ipcRenderer.invoke('ai:clearApiKey', provider),
+  detectLocalClis: () => ipcRenderer.invoke('ai:detectLocalClis'),
   listAiModels: (payload) => ipcRenderer.invoke('ai:listModels', payload),
   generateAiReport: () => ipcRenderer.invoke('ai:generateReport'),
   validateAdvisorInput: (payload) => ipcRenderer.invoke('ai:validateAdvisorInput', payload),
