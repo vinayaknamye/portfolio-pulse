@@ -9,9 +9,18 @@ export interface BrokerConnectionStatus {
   lastError: string | null;
 }
 
-export type AIProviderId = 'claude' | 'gemini' | 'openai' | 'ollama';
+export type AIProviderId = 'claude' | 'gemini' | 'openai' | 'ollama' | 'local_cli';
+export type LocalCliToolId = 'agy' | 'gemini' | 'codex' | 'claude';
 export type AIScheduleMode = 'manual' | 'weekly' | 'daily';
 export type ThemeMode = 'dark' | 'light';
+
+export interface LocalCliDetectionInfo {
+  id: LocalCliToolId;
+  label: string;
+  command: string;
+  installed: boolean;
+  resolvedPath: string | null;
+}
 
 export interface UserProfile {
   displayName: string;
@@ -30,6 +39,8 @@ export interface UserProfile {
   aiProvider: AIProviderId;
   aiModel: string;
   aiBaseUrl: string;
+  aiCliTool?: LocalCliToolId;
+  aiCliBinaryPath?: string;
   theme: ThemeMode;
   strategyMarkdown: string;
 }

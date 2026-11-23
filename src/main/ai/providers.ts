@@ -1,5 +1,6 @@
-import { AIProviderId } from '@shared/types';
+import { AIProviderId, LocalCliToolId } from '@shared/types';
 import { AI_PROVIDER_PRESETS } from '@shared/constants';
+import { listLocalCliModels, runLocalCliCompletion } from './localCli';
 
 export interface LLMAttachment {
   fileName: string;
@@ -19,6 +20,8 @@ export interface LLMCompletionRequest {
   model: string;
   apiKey: string | null;
   baseUrl?: string;
+  cliTool?: LocalCliToolId;
+  cliBinaryPath?: string;
   systemPrompt: string;
   messages: LLMChatTurn[];
   maxTokens?: number;
@@ -39,9 +42,14 @@ export interface ListModelsRequest {
   provider: AIProviderId;
   apiKey: string | null;
   baseUrl?: string;
+  cliTool?: LocalCliToolId;
+  cliBinaryPath?: string;
 }
 
 type FetchFn = typeof fetch;
+type SleepFn = (ms: number) => Promise<void>;
+
+const defaultSleep: SleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function trimSlash(url: string): string {
   return url.replace(/\/+$/, '');
@@ -149,7 +157,12 @@ export async function listProviderModels(
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 
-  // 4. Local Ollama Tags API
+  // 4. Local AI CLI (Terminal Session)
+  if (req.provider === 'local_cli') {
+    return listLocalCliModels(req.cliTool || 'agy', req.cliBinaryPath);
+  }
+
+  // 5. Local Ollama Tags API
   const res = await fetchImpl(`${baseUrl}/api/tags`, { method: 'GET' });
   if (!res.ok) {
     throw new Error(`Ollama models error (${res.status}): ${await parseErrorBody(res)}`);
@@ -183,14 +196,77 @@ function formatTextAttachmentBlock(att: LLMAttachment): string {
   return `--- Attached File: ${att.fileName} (${att.mimeType}) ---\n${body}\n--- End of ${att.fileName} ---`;
 }
 
+async function parseGeminiErrorDetails(
+  res: Response
+): Promise<{ message: string; retryDelayMs: number | null; isZeroQuota: boolean }> {
+  let rawText = '';
+  try {
+    rawText = await res.text();
+  } catch {
+    return { message: res.statusText || `HTTP ${res.status}`, retryDelayMs: null, isZeroQuota: false };
+  }
+
+  let message = rawText.slice(0, 320) || res.statusText || `HTTP ${res.status}`;
+  let retryDelayMs: number | null = null;
+
+  try {
+    const json = JSON.parse(rawText) as {
+      error?: {
+        message?: string;
+        details?: Array<{ retryDelay?: string }>;
+      };
+      message?: string;
+    };
+    if (json.error?.message) message = json.error.message;
+    else if (json.message) message = json.message;
+
+    for (const detail of json.error?.details || []) {
+      if (typeof detail.retryDelay === 'string') {
+        const m = detail.retryDelay.match(/(\d+(?:\.\d+)?)s/i);
+        if (m) {
+          retryDelayMs = Math.ceil(Number(m[1]) * 1000);
+          break;
+        }
+      }
+    }
+  } catch {
+    // Non-JSON error body
+  }
+
+  if (retryDelayMs === null) {
+    const retryAfter = res.headers?.get?.('retry-after');
+    if (retryAfter && /^\d+$/.test(retryAfter.trim())) {
+      retryDelayMs = Number(retryAfter.trim()) * 1000;
+    } else {
+      const msgMatch = message.match(/retry\s+in\s+(\d+(?:\.\d+)?)s/i);
+      if (msgMatch) retryDelayMs = Math.ceil(Number(msgMatch[1]) * 1000);
+    }
+  }
+
+  const isZeroQuota = /\blimit\s*:\s*0\b/i.test(message) || /\bfree_tier.*limit:\s*0/i.test(message);
+  return { message, retryDelayMs, isZeroQuota };
+}
+
 export async function runLLMCompletion(
   req: LLMCompletionRequest,
-  fetchImpl: FetchFn = fetch
+  fetchImpl: FetchFn = fetch,
+  sleepImpl: SleepFn = defaultSleep
 ): Promise<LLMCompletionResponse> {
   const preset = AI_PROVIDER_PRESETS[req.provider];
   const model = (req.model || preset.defaultModel).trim();
   const baseUrl = trimSlash((req.baseUrl || preset.defaultBaseUrl).trim());
   const maxTokens = req.maxTokens ?? 2400;
+
+  if (req.provider === 'local_cli') {
+    const cliRes = await runLocalCliCompletion({
+      cliTool: req.cliTool || 'agy',
+      cliBinaryPath: req.cliBinaryPath,
+      model,
+      systemPrompt: req.systemPrompt,
+      messages: req.messages
+    });
+    return { text: cliRes.text, provider: req.provider, model: cliRes.model };
+  }
 
   if (preset.requiresKey && (!req.apiKey || !req.apiKey.trim())) {
     throw new Error(`Missing API key for ${preset.label}. Add your key in AI Insights or Settings.`);
@@ -332,7 +408,32 @@ export async function runLLMCompletion(
       }
     }
 
+    if (!res.ok && res.status === 429) {
+      const rateInfo = await parseGeminiErrorDetails(res);
+      if (rateInfo.isZeroQuota) {
+        throw new Error(
+          `Google Gemini rate limit (429): "${cleanModel}" has 0 free-tier quota on this Google AI Studio project. Switch to a Flash/Flash-Lite model, enable AI Studio billing, or switch Provider to "Local AI CLI (Terminal Session)" in Settings.`
+        );
+      }
+      // Transient RPM/TPM burst limit: automatically retry once if suggested wait is short
+      const waitMs = rateInfo.retryDelayMs !== null ? Math.min(rateInfo.retryDelayMs, 12_000) : 3_000;
+      if (rateInfo.retryDelayMs === null || rateInfo.retryDelayMs <= 12_000) {
+        await sleepImpl(waitMs);
+        res = await callGemini(useSys, allowPdf);
+      } else {
+        throw new Error(
+          `Google Gemini rate limit (429): ${rateInfo.message} — Try a Flash-Lite model, enable AI Studio billing, or switch to "Local AI CLI (Terminal Session)" in Settings.`
+        );
+      }
+    }
+
     if (!res.ok) {
+      if (res.status === 429) {
+        const rateInfo = await parseGeminiErrorDetails(res);
+        throw new Error(
+          `Google Gemini rate limit (429): ${rateInfo.message} — Try again shortly, enable AI Studio billing, or switch Provider to "Local AI CLI (Terminal Session)" in Settings.`
+        );
+      }
       throw new Error(`Google Gemini error (${res.status}): ${await parseErrorBody(res)}`);
     }
 

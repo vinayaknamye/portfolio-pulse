@@ -12,11 +12,20 @@ import {
   Loader2,
   RefreshCw,
   Sparkles,
+  Terminal,
   Trash2,
   Unlink
 } from 'lucide-react';
-import { AIProviderId, AIScheduleMode, AppStatePayload, BrokerId, UserProfile } from '@shared/types';
-import { AI_KEY_GUIDELINES, AI_PROVIDER_PRESETS } from '@shared/constants';
+import {
+  AIProviderId,
+  AIScheduleMode,
+  AppStatePayload,
+  BrokerId,
+  LocalCliDetectionInfo,
+  LocalCliToolId,
+  UserProfile
+} from '@shared/types';
+import { AI_KEY_GUIDELINES, AI_PROVIDER_PRESETS, LOCAL_CLI_PRESETS } from '@shared/constants';
 import { formatTimestamp } from '../lib/format';
 
 interface SettingsProps {
@@ -54,10 +63,14 @@ export const Settings: React.FC<SettingsProps> = ({
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const { profile, brokers } = state;
 
-  // AI BYOK configuration state
+  // AI BYOK & Local CLI configuration state
   const [provider, setProvider] = useState<AIProviderId>(profile.aiProvider);
   const [model, setModel] = useState(profile.aiModel);
   const [baseUrl, setBaseUrl] = useState(profile.aiBaseUrl);
+  const [cliTool, setCliTool] = useState<LocalCliToolId>(profile.aiCliTool || 'agy');
+  const [cliBinaryPath, setCliBinaryPath] = useState(profile.aiCliBinaryPath || '');
+  const [detectedClis, setDetectedClis] = useState<LocalCliDetectionInfo[]>([]);
+  const [detectingClis, setDetectingClis] = useState(false);
   const [aiSchedule, setAiSchedule] = useState<AIScheduleMode>(profile.aiSchedule);
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [keySavedFlash, setKeySavedFlash] = useState(false);
@@ -78,25 +91,62 @@ export const Settings: React.FC<SettingsProps> = ({
     setProvider(profile.aiProvider);
     setModel(profile.aiModel);
     setBaseUrl(profile.aiBaseUrl);
+    setCliTool(profile.aiCliTool || 'agy');
+    setCliBinaryPath(profile.aiCliBinaryPath || '');
     setAiSchedule(profile.aiSchedule);
-  }, [profile.aiProvider, profile.aiModel, profile.aiBaseUrl, profile.aiSchedule]);
+  }, [
+    profile.aiProvider,
+    profile.aiModel,
+    profile.aiBaseUrl,
+    profile.aiCliTool,
+    profile.aiCliBinaryPath,
+    profile.aiSchedule
+  ]);
 
   const preset = AI_PROVIDER_PRESETS[provider];
   const hasStoredKey = state.hasAiApiKey[provider];
   const isAiConfigured = !preset.requiresKey || hasStoredKey;
   const hasAnyKey = !preset.requiresKey || hasStoredKey || apiKeyInput.trim().length > 0;
+  const activeCliInfo = detectedClis.find((c) => c.id === cliTool) || null;
+  const activeCliPreset = LOCAL_CLI_PRESETS[cliTool];
+
+  const refreshLocalClis = async (): Promise<LocalCliDetectionInfo[]> => {
+    setDetectingClis(true);
+    try {
+      const list = await window.portfolioPulse.detectLocalClis();
+      setDetectedClis(list);
+      return list;
+    } catch {
+      return [];
+    } finally {
+      setDetectingClis(false);
+    }
+  };
 
   const fetchLiveModels = async (
     targetProvider: AIProviderId,
-    opts?: { apiKeyOverride?: string; baseUrlOverride?: string; currentModel?: string }
+    opts?: {
+      apiKeyOverride?: string;
+      baseUrlOverride?: string;
+      cliToolOverride?: LocalCliToolId;
+      cliBinaryPathOverride?: string;
+      currentModel?: string;
+    }
   ) => {
     setLoadingModels(true);
     setAiError(null);
     try {
+      const resolvedCliTool = opts?.cliToolOverride ?? cliTool;
+      const resolvedCliPath =
+        opts?.cliBinaryPathOverride !== undefined
+          ? opts.cliBinaryPathOverride
+          : cliBinaryPath.trim() || undefined;
       const list = await window.portfolioPulse.listAiModels({
         provider: targetProvider,
         apiKeyOverride: opts?.apiKeyOverride,
-        baseUrl: opts?.baseUrlOverride ?? (baseUrl || undefined)
+        baseUrl: opts?.baseUrlOverride ?? (baseUrl || undefined),
+        cliTool: targetProvider === 'local_cli' ? resolvedCliTool : undefined,
+        cliBinaryPath: targetProvider === 'local_cli' ? resolvedCliPath : undefined
       });
       setLiveModels(list);
       setModelsSource('live');
@@ -119,8 +169,16 @@ export const Settings: React.FC<SettingsProps> = ({
 
   useEffect(() => {
     if (!aiConfigOpen) return;
+    if (provider !== profile.aiProvider) return;
     const p = AI_PROVIDER_PRESETS[provider];
-    if (!p.requiresKey || state.hasAiApiKey[provider]) {
+    if (provider === 'local_cli') {
+      void refreshLocalClis();
+      void fetchLiveModels('local_cli', {
+        cliToolOverride: profile.aiCliTool || 'agy',
+        cliBinaryPathOverride: (profile.aiCliBinaryPath || '').trim() || undefined,
+        currentModel: profile.aiModel
+      });
+    } else if (!p.requiresKey || state.hasAiApiKey[provider]) {
       void fetchLiveModels(provider, {
         baseUrlOverride: profile.aiBaseUrl || undefined,
         currentModel: profile.aiModel
@@ -129,7 +187,14 @@ export const Settings: React.FC<SettingsProps> = ({
       setLiveModels([]);
       setModelsSource('fallback');
     }
-  }, [aiConfigOpen, provider, state.hasAiApiKey[provider]]);
+  }, [
+    aiConfigOpen,
+    provider,
+    profile.aiProvider,
+    profile.aiCliTool,
+    profile.aiCliBinaryPath,
+    state.hasAiApiKey[provider]
+  ]);
 
   useEffect(() => {
     const trimmed = apiKeyInput.trim();
@@ -154,7 +219,38 @@ export const Settings: React.FC<SettingsProps> = ({
     setModelsSource('fallback');
     setCustomModelMode(false);
     setAiError(null);
+
+    if (next === 'local_cli') {
+      const detected = await refreshLocalClis();
+      const preferred = profile.aiCliTool || cliTool;
+      const isPreferredInstalled = detected.some((d) => d.id === preferred && d.installed);
+      const firstInstalled = detected.find((d) => d.installed)?.id;
+      const chosenCli = isPreferredInstalled ? preferred : firstInstalled || preferred || 'agy';
+      setCliTool(chosenCli);
+      await onSaveProfile({
+        aiProvider: next,
+        aiModel: nextPreset.defaultModel,
+        aiBaseUrl: '',
+        aiCliTool: chosenCli
+      });
+      return;
+    }
+
     await onSaveProfile({ aiProvider: next, aiModel: nextPreset.defaultModel, aiBaseUrl: '' });
+  };
+
+  const handleCliToolChange = async (nextCli: LocalCliToolId) => {
+    setCliTool(nextCli);
+    setCliBinaryPath('');
+    setModel('default');
+    setCustomModelMode(false);
+    setAiError(null);
+    await onSaveProfile({
+      aiProvider: 'local_cli',
+      aiCliTool: nextCli,
+      aiCliBinaryPath: '',
+      aiModel: 'default'
+    });
   };
 
   const handleSaveAiConfig = async () => {
@@ -164,11 +260,21 @@ export const Settings: React.FC<SettingsProps> = ({
       aiProvider: provider,
       aiModel: chosenModel,
       aiBaseUrl: baseUrl.trim(),
+      aiCliTool: cliTool,
+      aiCliBinaryPath: cliBinaryPath.trim(),
       aiSchedule
     });
     if (trimmedKey) {
       await onSaveApiKey(provider, trimmedKey);
       setApiKeyInput('');
+    }
+    if (provider === 'local_cli') {
+      await refreshLocalClis();
+      await fetchLiveModels('local_cli', {
+        cliToolOverride: cliTool,
+        cliBinaryPathOverride: cliBinaryPath.trim() || undefined,
+        currentModel: chosenModel
+      });
     }
     setKeySavedFlash(true);
     setTimeout(() => setKeySavedFlash(false), 1600);
@@ -261,11 +367,16 @@ export const Settings: React.FC<SettingsProps> = ({
               </div>
               <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
                 <span>
-                  {preset.label} · {model}
+                  {provider === 'local_cli' ? `Local AI CLI (${cliTool})` : preset.label} · {model}
                 </span>
                 {isAiConfigured ? (
                   <span className="inline-flex items-center gap-1 text-emerald-500">
-                    <CheckCircle2 className="h-3 w-3" /> Key Ready
+                    <CheckCircle2 className="h-3 w-3" />{' '}
+                    {provider === 'local_cli'
+                      ? 'Terminal CLI'
+                      : provider === 'ollama'
+                      ? 'Local Offline'
+                      : 'Key Ready'}
                   </span>
                 ) : (
                   <span className="text-amber-500">API key not configured</span>
@@ -360,6 +471,37 @@ export const Settings: React.FC<SettingsProps> = ({
                     />
                   </div>
                 </div>
+              ) : provider === 'local_cli' ? (
+                <div>
+                  <label className="flex items-center justify-between text-[11px] font-medium text-slate-500">
+                    <span>2. Local CLI Tool</span>
+                    <button
+                      type="button"
+                      disabled={detectingClis}
+                      onClick={() => void refreshLocalClis()}
+                      className="inline-flex items-center gap-0.5 text-[10px] text-emerald-500 hover:underline disabled:opacity-40"
+                    >
+                      <RefreshCw className={`h-2.5 w-2.5 ${detectingClis ? 'animate-spin' : ''}`} />
+                      Detect
+                    </button>
+                  </label>
+                  <select
+                    value={cliTool}
+                    onChange={(e) => void handleCliToolChange(e.target.value as LocalCliToolId)}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  >
+                    {(Object.keys(LOCAL_CLI_PRESETS) as LocalCliToolId[]).map((id) => {
+                      const info = detectedClis.find((c) => c.id === id);
+                      const statusSuffix = info ? (info.installed ? ' · Installed ✓' : ' · Not found') : '';
+                      return (
+                        <option key={id} value={id}>
+                          {LOCAL_CLI_PRESETS[id].label}
+                          {statusSuffix}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
               ) : (
                 <div>
                   <label className="text-[11px] font-medium text-slate-500">2. Ollama Base URL</label>
@@ -396,7 +538,9 @@ export const Settings: React.FC<SettingsProps> = ({
                       onClick={() =>
                         void fetchLiveModels(provider, {
                           apiKeyOverride: apiKeyInput.trim() || undefined,
-                          baseUrlOverride: baseUrl.trim() || undefined
+                          baseUrlOverride: baseUrl.trim() || undefined,
+                          cliToolOverride: cliTool,
+                          cliBinaryPathOverride: cliBinaryPath.trim() || undefined
                         })
                       }
                       className="inline-flex items-center gap-0.5 text-[10px] text-emerald-500 hover:underline disabled:opacity-40"
@@ -471,6 +615,47 @@ export const Settings: React.FC<SettingsProps> = ({
                   placeholder="https://api.openai.com"
                   className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                 />
+              </div>
+            )}
+
+            {provider === 'local_cli' && (
+              <div className="mt-3 space-y-2.5 rounded-xl border border-slate-200 bg-white/80 p-3 dark:border-slate-800 dark:bg-slate-900/50">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <div className="flex items-center gap-1.5">
+                    <Terminal className="h-3.5 w-3.5 text-emerald-500" />
+                    {activeCliInfo?.installed && activeCliInfo.resolvedPath ? (
+                      <span className="text-emerald-700 dark:text-emerald-300">
+                        Detected <code className="rounded bg-emerald-500/10 px-1 py-0.5">{activeCliInfo.resolvedPath}</code>
+                      </span>
+                    ) : cliBinaryPath.trim() ? (
+                      <span className="text-slate-600 dark:text-slate-300">
+                        Using custom executable path:{' '}
+                        <code className="rounded bg-slate-200 px-1 py-0.5 dark:bg-slate-800">{cliBinaryPath.trim()}</code>
+                      </span>
+                    ) : (
+                      <span className="text-amber-600 dark:text-amber-400">
+                        <code>{activeCliPreset.command}</code> not detected on PATH — {activeCliPreset.loginHint}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-400">{activeCliPreset.loginHint}</span>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-medium text-slate-500">
+                    Optional Custom Executable Path (leave blank for auto-detection)
+                  </label>
+                  <input
+                    value={cliBinaryPath}
+                    onChange={(e) => setCliBinaryPath(e.target.value)}
+                    placeholder={`Auto-detect (${activeCliPreset.command})`}
+                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  />
+                </div>
+
+                {activeCliPreset.note && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400">{activeCliPreset.note}</p>
+                )}
               </div>
             )}
 

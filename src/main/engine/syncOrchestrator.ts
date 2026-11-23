@@ -262,6 +262,8 @@ export class SyncOrchestrator {
         model: profile.aiModel,
         apiKey,
         baseUrl: profile.aiBaseUrl || undefined,
+        cliTool: profile.aiCliTool,
+        cliBinaryPath: profile.aiCliBinaryPath || undefined,
         systemPrompt: buildSystemPrompt(),
         messages: [{ role: 'user', content: buildReviewPrompt(contextBlock) }]
       });

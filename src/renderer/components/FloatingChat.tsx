@@ -66,6 +66,10 @@ export const FloatingChat: React.FC<FloatingChatProps> = ({
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const preset = AI_PROVIDER_PRESETS[state.profile.aiProvider];
+  const providerDisplayLabel =
+    state.profile.aiProvider === 'local_cli'
+      ? `Local AI CLI (${state.profile.aiCliTool || 'agy'})`
+      : preset.label;
   const needsKey = preset.requiresKey && !state.hasAiApiKey[state.profile.aiProvider];
   const starterPrompts = PROMPTS_BY_TAB[activeTab] || PROMPTS_BY_TAB.dashboard;
 
@@ -123,7 +127,7 @@ export const FloatingChat: React.FC<FloatingChatProps> = ({
           <div>
             <div className="text-xs font-semibold text-slate-900 dark:text-white">Portfolio AI Q&amp;A</div>
             <div className="text-[10px] text-slate-500 dark:text-slate-400">
-              {preset.label} · {state.profile.aiModel}
+              {providerDisplayLabel} · {state.profile.aiModel}
             </div>
           </div>
         </div>
@@ -221,7 +225,11 @@ export const FloatingChat: React.FC<FloatingChatProps> = ({
 
         {sending && (
           <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-500" /> Thinking with {state.profile.aiModel}…
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-500" /> Thinking with{' '}
+            {state.profile.aiProvider === 'local_cli'
+              ? `${state.profile.aiCliTool || 'agy'} CLI (${state.profile.aiModel})`
+              : state.profile.aiModel}
+            …
           </div>
         )}
 

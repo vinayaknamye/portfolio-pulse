@@ -1,4 +1,4 @@
-import { AIProviderId, InsuranceCategory, InsurancePolicy } from '@shared/types';
+import { AIProviderId, InsuranceCategory, InsurancePolicy, LocalCliToolId } from '@shared/types';
 import { AI_PROVIDER_PRESETS } from '@shared/constants';
 import { buildInsuranceExtractionPrompt } from '@main/ai/promptBuilder';
 import { runLLMCompletion } from '@main/ai/providers';
@@ -356,6 +356,8 @@ export async function parseInsuranceDocument(input: {
     model: string;
     apiKey: string | null;
     baseUrl?: string;
+    cliTool?: LocalCliToolId;
+    cliBinaryPath?: string;
   };
 }): Promise<{
   parsedBy: 'ai' | 'local_heuristic';
@@ -376,6 +378,8 @@ export async function parseInsuranceDocument(input: {
         model: ai.model,
         apiKey: ai.apiKey,
         baseUrl: ai.baseUrl || undefined,
+        cliTool: ai.cliTool,
+        cliBinaryPath: ai.cliBinaryPath || undefined,
         systemPrompt:
           'You extract structured Indian insurance policy data accurately and return ONLY raw JSON with zero markdown formatting.',
         maxTokens: 900,
