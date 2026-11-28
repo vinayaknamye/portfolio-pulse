@@ -113,7 +113,7 @@ export default function App() {
       if (!res.success) {
         showToast('err', res.error || 'Portfolio sync failed.');
       } else if (res.upstoxState === 'stale_reauth_required') {
-        showToast('err', 'INDmoney synced, but Upstox session expired — reconnect Upstox.');
+        showToast('err', 'INDmoney synced, but Upstox needs reconnect — previous avg buy prices were carried forward.');
       } else {
         showToast('ok', 'Portfolio synced and reconciled!');
       }
@@ -283,6 +283,7 @@ export default function App() {
   const needsUpstoxRelink =
     !state.isDemoMode &&
     (state.brokers.upstox.state === 'reauth_required' ||
+      state.brokers.upstox.state === 'error' ||
       state.latestSnapshot?.upstoxState === 'stale_reauth_required');
 
   const needsUpstoxInitialSync =
@@ -426,7 +427,13 @@ export default function App() {
                     <span>INDmoney</span>
                     <span
                       className={`h-2 w-2 rounded-full ${
-                        state.brokers.indmoney.state === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                        state.brokers.indmoney.state === 'connected'
+                          ? 'bg-emerald-500'
+                          : state.brokers.indmoney.state === 'reauth_required'
+                          ? 'bg-amber-500'
+                          : state.brokers.indmoney.state === 'error'
+                          ? 'bg-rose-500'
+                          : 'bg-slate-500'
                       }`}
                     />
                   </div>
@@ -438,6 +445,8 @@ export default function App() {
                           ? 'bg-emerald-500'
                           : state.brokers.upstox.state === 'reauth_required'
                           ? 'bg-amber-500'
+                          : state.brokers.upstox.state === 'error'
+                          ? 'bg-rose-500'
                           : 'bg-slate-500'
                       }`}
                     />
@@ -457,12 +466,12 @@ export default function App() {
                     {state.brokers.upstox.state === 'error' && state.brokers.upstox.lastError ? (
                       <>
                         <strong>Upstox sync issue:</strong> {state.brokers.upstox.lastError} (INDmoney synced cleanly
-                        and prior Upstox cost basis was carried forward.)
+                        and previous average buy prices were carried forward.)
                       </>
                     ) : (
                       <>
-                        <strong>Upstox session expired:</strong> INDmoney synced cleanly and your last Upstox cost basis
-                        was carried forward. Re-link Upstox to refresh live margin &amp; demat holdings.
+                        <strong>Upstox session expired:</strong> INDmoney synced cleanly and previous average buy prices
+                        were carried forward. Re-link Upstox to refresh live margin &amp; demat holdings.
                       </>
                     )}
                   </span>

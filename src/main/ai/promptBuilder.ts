@@ -104,7 +104,7 @@ export function buildPortfolioContextBlock(
 
   const upstoxLines =
     snapshot.upstoxState !== 'not_linked'
-      ? `- Upstox Cost-Basis Status: ${snapshot.upstoxState}\n- Upstox Idle Margin: ₹${snapshot.upstoxAvailableMargin.toLocaleString('en-IN')}\n`
+      ? `- Upstox Sync Status: ${snapshot.upstoxState}\n- Upstox Idle Margin: ₹${snapshot.upstoxAvailableMargin.toLocaleString('en-IN')}\n`
       : '';
 
   return `## Portfolio Snapshot (${snapshot.snapshotDate})

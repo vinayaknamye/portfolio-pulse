@@ -60,8 +60,8 @@ export function runPortfolioAudit(input: AuditInput): AuditAlert[] {
     push(
       'auth',
       'action',
-      'Upstox session expired — reconnect required',
-      'INDmoney synced successfully, and your last known Upstox cost basis was carried forward. Reconnect Upstox to refresh live margin and exact demat holdings.'
+      'Upstox reconnect required',
+      'INDmoney synced successfully, and your previous average buy prices were carried forward. Reconnect Upstox to refresh live margin and exact demat holdings.'
     );
   }
 

@@ -1,8 +1,8 @@
 import { AuditAlert, PortfolioSnapshot, SyncResult, UpstoxFetchPayload, UpstoxSyncState } from '@shared/types';
 import { PortfolioRepository } from '@main/db/repository';
-import { SecureStore } from '@main/db/secureStore';
-import { IndmoneyAdapter } from '@main/mcp/indmoneyAdapter';
-import { UpstoxAdapter } from '@main/mcp/upstoxAdapter';
+import type { SecureStore } from '@main/db/secureStore';
+import type { IndmoneyAdapter } from '@main/mcp/indmoneyAdapter';
+import type { UpstoxAdapter } from '@main/mcp/upstoxAdapter';
 import { ReauthRequiredError } from '@main/mcp/types';
 import { reconcilePortfolio } from './reconciler';
 import { buildNotificationSummary, runPortfolioAudit } from './auditor';
@@ -62,14 +62,13 @@ export class SyncOrchestrator {
         });
       } else {
         const statuses = repo.getBrokerStatuses();
+        // Attempt any broker that has stored tokens OR has not been explicitly disconnected
+        // (including 'error' after a failed connect/upgrade Keychain reset, so we never drop to
+        // 'not_linked' and wipe carried-forward Upstox average buy prices).
         const shouldAttemptIndmoney =
-          indmoney.hasStoredSession() ||
-          statuses.indmoney.state === 'connected' ||
-          statuses.indmoney.state === 'reauth_required';
+          indmoney.hasStoredSession() || statuses.indmoney.state !== 'disconnected';
         const shouldAttemptUpstox =
-          upstox.hasStoredSession() ||
-          statuses.upstox.state === 'connected' ||
-          statuses.upstox.state === 'reauth_required';
+          upstox.hasStoredSession() || statuses.upstox.state !== 'disconnected';
 
         if (!shouldAttemptIndmoney && !shouldAttemptUpstox) {
           return {

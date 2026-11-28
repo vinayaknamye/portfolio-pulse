@@ -1,6 +1,6 @@
 {
   "name": "portfolio-pulse",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "engines": {
     "node": ">=22.0.0"
   },
